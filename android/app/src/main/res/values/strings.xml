@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ClipLink</string>
+    <string name="history_tab">历史</string>
+    <string name="preferences_tab">偏好设置</string>
+    <string name="search_hint">搜索历史内容</string>
+    <string name="refresh">刷新</string>
+    <string name="clear">清除</string>
+    <string name="device_name">设备名称</string>
+    <string name="history_limit">历史数量上限</string>
+    <string name="share_local_history">共享本机剪切板历史</string>
+    <string name="prefer_remote_latest">粘贴时优先远端最新记录</string>
+    <string name="discovery_enabled">启用设备发现</string>
+    <string name="online_devices">可共享设备</string>
+    <string name="no_devices_yet">暂无已连接或已信任设备</string>
+    <string name="trust_device">信任</string>
+    <string name="revoke_device">移除信任</string>
+    <string name="choose_device">选择设备</string>
+    <string name="choose_device_first">请先选择设备</string>
+    <string name="save_preferences">保存偏好设置</string>
+    <string name="android_service_notification_channel">后台同步</string>
+    <string name="android_service_notification_channel_description">维持设备发现、局域网同步与 Android 历史状态刷新</string>
+    <string name="android_service_notification_title">ClipLink 正在运行</string>
+    <string name="android_service_notification_text">后台保持设备同步；采集本机剪切板需要应用处于前台</string>
+</resources>
