@@ -28,7 +28,7 @@ jobs:
       release_reason: ${{ steps.detect.outputs.release_reason }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -96,17 +96,19 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             should_release="true"
             release_reason="Manual release dispatch requested."
-          elif [[ "$current_version" != "$previous_version" ]]; then
-            if [[ "$tag_exists" == "true" ]]; then
-              release_reason="Version changed, but tag ${release_tag} already exists."
-            else
-              should_release="true"
+          elif [[ "$tag_exists" != "true" ]]; then
+            should_release="true"
+            if [[ "$current_version" != "$previous_version" ]]; then
               if [[ -n "$previous_version" ]]; then
                 release_reason="Version changed from ${previous_version} to ${current_version}."
               else
                 release_reason="Version changed to ${current_version}."
               fi
+            else
+              release_reason="Tag ${release_tag} does not exist yet."
             fi
+          elif [[ "$current_version" != "$previous_version" ]]; then
+            release_reason="Version changed, but tag ${release_tag} already exists."
           fi
 
           {
@@ -130,7 +132,7 @@ jobs:
     if: needs.detect-version.outputs.should_release == 'true'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -162,7 +164,7 @@ jobs:
         shell: bash
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -195,10 +197,10 @@ jobs:
     if: needs.detect-version.outputs.should_release == 'true'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -252,6 +254,26 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Ensure Release Tag Exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.detect-version.outputs.tag }}
+          RELEASE_TARGET: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if gh api "repos/${REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "Tag ${RELEASE_TAG} already exists."
+            exit 0
+          fi
+
+          gh api \
+            --method POST \
+            "repos/${REPOSITORY}/git/refs" \
+            -f ref="refs/tags/${RELEASE_TAG}" \
+            -f sha="${RELEASE_TARGET}"
+
       - name: Download Build Artifacts
         uses: actions/download-artifact@v4
         with:
