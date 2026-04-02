@@ -300,12 +300,18 @@ jobs:
             exit 1
           fi
 
-          if gh release view "$RELEASE_TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" "${assets[@]}" --repo "$REPOSITORY" --clobber
-          else
-            gh release create "$RELEASE_TAG" "${assets[@]}" \
+          if ! gh release view "$RELEASE_TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
               --repo "$REPOSITORY" \
               --title "$RELEASE_TAG" \
               --target "$RELEASE_TARGET" \
               --generate-notes
           fi
+
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --repo "$REPOSITORY" --clobber
+
+          echo "Uploaded release assets:"
+          gh release view "$RELEASE_TAG" \
+            --repo "$REPOSITORY" \
+            --json url,assets \
+            --jq '.url, (.assets[]?.name // "no-assets")'
