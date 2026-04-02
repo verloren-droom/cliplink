@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{collections::BTreeSet, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -79,6 +79,29 @@ impl ClipboardItem {
                 .collect::<Vec<_>>()
                 .join("\n"),
         }
+    }
+
+    #[cfg_attr(target_os = "android", allow(dead_code))]
+    pub fn local_file_parent_directories(&self) -> Vec<PathBuf> {
+        let ClipboardPayload::Files(files) = &self.payload else {
+            return Vec::new();
+        };
+
+        let mut directories = BTreeSet::new();
+        for file in files {
+            let Some(parent) = file
+                .local_path
+                .as_ref()
+                .or(file.source_path.as_ref())
+                .and_then(|path| path.parent())
+                .filter(|path| !path.as_os_str().is_empty())
+            else {
+                continue;
+            };
+            directories.insert(parent.to_path_buf());
+        }
+
+        directories.into_iter().collect()
     }
 }
 

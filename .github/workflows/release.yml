@@ -1,0 +1,287 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  detect-version:
+    name: Detect Version Change
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.detect.outputs.version }}
+      tag: ${{ steps.detect.outputs.tag }}
+      should_release: ${{ steps.detect.outputs.should_release }}
+      release_reason: ${{ steps.detect.outputs.release_reason }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch Tags
+        run: git fetch --force --tags
+
+      - name: Detect Release Version
+        id: detect
+        run: |
+          set -euo pipefail
+
+          extract_version_from_file() {
+            local file_path="$1"
+            awk -F ' *= *' '
+              $0 == "[package]" { in_package = 1; next }
+              /^\[/ && in_package { exit }
+              in_package && $1 == "version" {
+                value = $2
+                gsub(/^"/, "", value)
+                gsub(/"$/, "", value)
+                print value
+                exit
+              }
+            ' "$file_path"
+          }
+
+          extract_version_from_ref() {
+            local git_ref="$1"
+            git show "${git_ref}:Cargo.toml" | awk -F ' *= *' '
+              $0 == "[package]" { in_package = 1; next }
+              /^\[/ && in_package { exit }
+              in_package && $1 == "version" {
+                value = $2
+                gsub(/^"/, "", value)
+                gsub(/"$/, "", value)
+                print value
+                exit
+              }
+            '
+          }
+
+          current_version="$(extract_version_from_file Cargo.toml)"
+          if [[ -z "$current_version" ]]; then
+            echo "Failed to read package version from Cargo.toml." >&2
+            exit 1
+          fi
+
+          release_tag="v${current_version}"
+          previous_version=""
+          previous_sha="${{ github.event.before }}"
+
+          if [[ -n "$previous_sha" && "$previous_sha" != "0000000000000000000000000000000000000000" ]] \
+            && git cat-file -e "${previous_sha}:Cargo.toml" 2>/dev/null; then
+            previous_version="$(extract_version_from_ref "$previous_sha")"
+          fi
+
+          tag_exists="false"
+          if git rev-parse -q --verify "refs/tags/${release_tag}" >/dev/null; then
+            tag_exists="true"
+          fi
+
+          should_release="false"
+          release_reason="Version did not change."
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            should_release="true"
+            release_reason="Manual release dispatch requested."
+          elif [[ "$current_version" != "$previous_version" ]]; then
+            if [[ "$tag_exists" == "true" ]]; then
+              release_reason="Version changed, but tag ${release_tag} already exists."
+            else
+              should_release="true"
+              if [[ -n "$previous_version" ]]; then
+                release_reason="Version changed from ${previous_version} to ${current_version}."
+              else
+                release_reason="Version changed to ${current_version}."
+              fi
+            fi
+          fi
+
+          {
+            echo "version=${current_version}"
+            echo "tag=${release_tag}"
+            echo "should_release=${should_release}"
+            echo "release_reason=${release_reason}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Print Decision
+        run: |
+          echo "version=${{ steps.detect.outputs.version }}"
+          echo "tag=${{ steps.detect.outputs.tag }}"
+          echo "should_release=${{ steps.detect.outputs.should_release }}"
+          echo "reason=${{ steps.detect.outputs.release_reason }}"
+
+  build-macos:
+    name: Build macOS Assets
+    runs-on: macos-latest
+    needs: detect-version
+    if: needs.detect-version.outputs.should_release == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build macOS Release
+        run: |
+          chmod +x scripts/build.sh
+          ./scripts/build.sh macos-release
+
+      - name: Upload macOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macos
+          if-no-files-found: error
+          path: |
+            dist/*.zip
+            dist/*.tar.xz
+
+  build-windows:
+    name: Build Windows Assets
+    runs-on: windows-latest
+    needs: detect-version
+    if: needs.detect-version.outputs.should_release == 'true'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Windows Target
+        run: |
+          chmod +x scripts/build.sh
+          ./scripts/build.sh windows-setup
+
+      - name: Build Windows Release
+        run: ./scripts/build.sh windows-release
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          if-no-files-found: error
+          path: |
+            dist/*.exe
+            dist/*.zip
+            dist/*.tar.xz
+
+  build-android:
+    name: Build Android Assets
+    runs-on: ubuntu-latest
+    needs: detect-version
+    if: needs.detect-version.outputs.should_release == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-ndk
+        run: |
+          if ! cargo ndk --version >/dev/null 2>&1; then
+            cargo install cargo-ndk --locked
+          fi
+
+      - name: Accept Android SDK Licenses
+        run: yes | sdkmanager --licenses >/dev/null
+
+      - name: Install Android SDK Packages
+        run: |
+          chmod +x scripts/build.sh
+          ./scripts/build.sh android-setup
+
+      - name: Build Android Release
+        run: ./scripts/build.sh android-release
+
+      - name: Upload Android Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-android
+          if-no-files-found: error
+          path: |
+            android/app/build/outputs/apk/release/*.apk
+
+  publish-release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs:
+      - detect-version
+      - build-macos
+      - build-windows
+      - build-android
+    if: needs.detect-version.outputs.should_release == 'true'
+    permissions:
+      contents: write
+    steps:
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: List Release Assets
+        run: find release-assets -maxdepth 1 -type f | sort
+
+      - name: Create or Update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.detect-version.outputs.tag }}
+          RELEASE_TARGET: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          assets=(release-assets/*)
+          if [[ "${#assets[@]}" -eq 0 ]]; then
+            echo "No release assets were produced." >&2
+            exit 1
+          fi
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+          else
+            gh release create "$RELEASE_TAG" "${assets[@]}" \
+              --title "$RELEASE_TAG" \
+              --target "$RELEASE_TARGET" \
+              --generate-notes
+          fi

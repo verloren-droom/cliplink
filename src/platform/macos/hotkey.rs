@@ -12,27 +12,10 @@ use objc2_app_kit::{
     NSUpArrowFunctionKey,
 };
 
+use crate::platform::hotkey_display::format_hotkey_for_display as format_hotkey_for_display_impl;
+
 pub(super) fn format_hotkey_for_display(raw: &str) -> String {
-    match raw.parse::<HotKey>() {
-        Ok(hotkey) => {
-            let mut rendered = Vec::new();
-            if hotkey.mods.contains(Modifiers::SUPER) {
-                rendered.push("⌘".to_string());
-            }
-            if hotkey.mods.contains(Modifiers::CONTROL) {
-                rendered.push("⌃".to_string());
-            }
-            if hotkey.mods.contains(Modifiers::ALT) {
-                rendered.push("⌥".to_string());
-            }
-            if hotkey.mods.contains(Modifiers::SHIFT) {
-                rendered.push("⇧".to_string());
-            }
-            rendered.push(format_hotkey_key_for_display(hotkey.key));
-            rendered.join(" ")
-        }
-        Err(_) => raw.to_string(),
-    }
+    format_hotkey_for_display_impl(raw)
 }
 
 pub(super) fn hotkey_from_event(event: &NSEvent) -> Result<Option<HotKey>, &'static str> {
@@ -72,52 +55,6 @@ pub(super) fn hotkey_from_event(event: &NSEvent) -> Result<Option<HotKey>, &'sta
 
     Ok(Some(HotKey::new(Some(mods), code)))
 }
-
-fn format_hotkey_key_for_display(code: Code) -> String {
-    let raw = code.to_string();
-
-    if let Some(letter) = raw.strip_prefix("Key") {
-        return letter.to_string();
-    }
-
-    if let Some(digit) = raw.strip_prefix("Digit") {
-        return digit.to_string();
-    }
-
-    if let Some(numpad) = raw.strip_prefix("Numpad") {
-        return format!("数字键盘 {numpad}");
-    }
-
-    match code {
-        Code::Space => "空格".to_string(),
-        Code::Enter => "↩".to_string(),
-        Code::Tab => "⇥".to_string(),
-        Code::Escape => "⎋".to_string(),
-        Code::Backspace => "⌫".to_string(),
-        Code::Delete => "⌦".to_string(),
-        Code::ArrowUp => "↑".to_string(),
-        Code::ArrowDown => "↓".to_string(),
-        Code::ArrowLeft => "←".to_string(),
-        Code::ArrowRight => "→".to_string(),
-        Code::Home => "↖".to_string(),
-        Code::End => "↘".to_string(),
-        Code::PageUp => "⇞".to_string(),
-        Code::PageDown => "⇟".to_string(),
-        Code::Comma => ",".to_string(),
-        Code::Period => ".".to_string(),
-        Code::Slash => "/".to_string(),
-        Code::Semicolon => ";".to_string(),
-        Code::Quote => "'".to_string(),
-        Code::BracketLeft => "[".to_string(),
-        Code::BracketRight => "]".to_string(),
-        Code::Backslash => "\\".to_string(),
-        Code::Backquote => "`".to_string(),
-        Code::Minus => "-".to_string(),
-        Code::Equal => "=".to_string(),
-        _ => raw,
-    }
-}
-
 fn code_from_key_char(ch: char) -> Option<Code> {
     if ch.is_ascii_alphabetic() {
         return Code::from_str(&format!("Key{}", ch.to_ascii_uppercase())).ok();

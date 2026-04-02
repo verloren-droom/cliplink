@@ -6,7 +6,7 @@ use std::{
 };
 
 use block2::RcBlock;
-use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
+use global_hotkey::{GlobalHotKeyManager, hotkey::HotKey};
 use objc2::{
     DefinedClass, MainThreadOnly, define_class, msg_send,
     rc::Retained,
@@ -17,28 +17,34 @@ use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSBackingStoreType,
     NSButton, NSColor, NSControl, NSControlTextEditingDelegate, NSEvent, NSEventMask,
     NSEventModifierFlags, NSEventType, NSFloatingWindowLevel, NSFont, NSImage, NSImageScaling,
-    NSLineBreakMode, NSMenu, NSMenuItem, NSPanel, NSPopUpMenuWindowLevel, NSScreen, NSScrollView,
-    NSSearchField, NSSearchFieldDelegate, NSStatusBar, NSStatusItem, NSStatusItemBehavior,
-    NSTabView, NSTabViewItem, NSTabViewType, NSTableCellView, NSTableColumn,
-    NSTableColumnResizingOptions, NSTableView, NSTableViewColumnAutoresizingStyle,
-    NSTableViewDataSource, NSTableViewDelegate, NSTableViewRowSizeStyle,
-    NSTableViewSelectionHighlightStyle, NSTableViewStyle, NSTextField, NSTextFieldDelegate,
-    NSTextView, NSVariableStatusItemLength, NSView, NSWindow, NSWindowCollectionBehavior,
-    NSWindowDelegate, NSWindowStyleMask, NSWindowTitleVisibility, NSWorkspace,
+    NSLineBreakMode, NSMenu, NSMenuDelegate, NSMenuItem, NSPanel, NSPopUpButton,
+    NSPopUpMenuWindowLevel, NSScreen, NSScrollView, NSSearchField, NSSearchFieldDelegate,
+    NSStatusBar, NSStatusItem, NSStatusItemBehavior, NSTabView, NSTabViewItem, NSTabViewType,
+    NSTableCellView, NSTableColumn, NSTableColumnResizingOptions, NSTableView,
+    NSTableViewColumnAutoresizingStyle, NSTableViewDataSource, NSTableViewDelegate,
+    NSTableViewRowSizeStyle, NSTableViewSelectionHighlightStyle, NSTableViewStyle, NSTextField,
+    NSTextFieldDelegate, NSTextView, NSVariableStatusItemLength, NSView, NSWindow,
+    NSWindowCollectionBehavior, NSWindowDelegate, NSWindowStyleMask, NSWindowTitleVisibility,
+    NSWorkspace,
 };
 use objc2_foundation::{
-    MainThreadMarker, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSPoint,
-    NSRect, NSSize, NSString, NSTimer, NSUInteger,
+    MainThreadMarker, NSInteger, NSMutableIndexSet, NSNotFound, NSNotification, NSObject,
+    NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSTimer, NSUInteger,
 };
 use uuid::Uuid;
 
 use crate::{
-    controller::{AppController, HistoryRow, SettingsDeviceEntry, SettingsUpdate},
+    controller::{
+        AppController, HistoryRow, HistoryScope, HistoryScopeOption, SettingsDeviceEntry,
+        SettingsUpdate,
+    },
     core::{clipboard::ClipboardBackend, error::AppResult},
     platform::PlatformResult,
 };
 
 mod about;
+mod accessors;
+mod actions;
 mod autostart;
 mod clipboard;
 mod hotkey;
@@ -46,7 +52,9 @@ mod keychain;
 mod panel;
 mod paste;
 mod preferences;
+mod selection;
 mod tray;
+mod trust;
 mod ui;
 mod widgets;
 
@@ -57,19 +65,31 @@ type HotKeyMonitorBlock = RcBlock<dyn Fn(NonNull<NSEvent>) -> *mut NSEvent>;
 struct AppDelegateIvars {
     controller: RefCell<AppController>,
     search_query: RefCell<String>,
+    history_scope_key: RefCell<String>,
+    history_scope_options: RefCell<Vec<HistoryScopeOption>>,
     filtered_rows: RefCell<Vec<HistoryRow>>,
     selected_row: RefCell<Option<usize>>,
+    selected_history_ids: RefCell<Vec<Uuid>>,
     preferences_baseline: RefCell<Option<SettingsUpdate>>,
     preferences_hotkey_value: RefCell<String>,
     menu_history_ids: RefCell<Vec<Uuid>>,
     previous_frontmost_bundle_id: RefCell<Option<String>>,
+    active_trust_prompt_id: RefCell<Option<Uuid>>,
     status_item: OnceCell<Retained<NSStatusItem>>,
     status_menu: OnceCell<Retained<NSMenu>>,
     history_context_menu: RefCell<Option<Retained<NSMenu>>>,
+    history_context_separator_item: RefCell<Option<Retained<NSMenuItem>>>,
+    history_context_pin_item: RefCell<Option<Retained<NSMenuItem>>>,
+    history_context_open_folder_item: RefCell<Option<Retained<NSMenuItem>>>,
+    history_context_delete_item: RefCell<Option<Retained<NSMenuItem>>>,
     panel: RefCell<Option<Retained<NSPanel>>>,
     about_window: RefCell<Option<Retained<NSWindow>>>,
     search_field: RefCell<Option<Retained<NSSearchField>>>,
+    history_scope_button: RefCell<Option<Retained<NSPopUpButton>>>,
     table_view: RefCell<Option<Retained<NSTableView>>>,
+    panel_status_label: RefCell<Option<Retained<NSTextField>>>,
+    panel_progress_track: RefCell<Option<Retained<NSTextField>>>,
+    panel_progress_fill: RefCell<Option<Retained<NSTextField>>>,
     preferences_window: RefCell<Option<Retained<NSWindow>>>,
     preferences_status_label: RefCell<Option<Retained<NSTextField>>>,
     preferences_save_button: RefCell<Option<Retained<NSButton>>>,
@@ -85,8 +105,10 @@ struct AppDelegateIvars {
     preferences_devices_table: RefCell<Option<Retained<NSTableView>>>,
     preferences_devices_rows: RefCell<Vec<SettingsDeviceEntry>>,
     preferences_selected_device_id: RefCell<Option<String>>,
-    preferences_trust_device_button: RefCell<Option<Retained<NSButton>>>,
-    preferences_revoke_device_button: RefCell<Option<Retained<NSButton>>>,
+    preferences_selected_device_ids: RefCell<Vec<String>>,
+    preferences_devices_context_menu: RefCell<Option<Retained<NSMenu>>>,
+    preferences_devices_context_action_item: RefCell<Option<Retained<NSMenuItem>>>,
+    preferences_devices_context_properties_item: RefCell<Option<Retained<NSMenuItem>>>,
     hotkey_manager: RefCell<Option<GlobalHotKeyManager>>,
     hotkey: RefCell<Option<HotKey>>,
     hotkey_capture_monitor: RefCell<Option<Retained<AnyObject>>>,
@@ -155,6 +177,17 @@ define_class!(
         }
     }
 
+    unsafe impl NSMenuDelegate for AppDelegate {
+        #[unsafe(method(menuWillOpen:))]
+        fn menu_will_open(&self, menu: &NSMenu) {
+            if self.menu_matches_history_context_menu(menu) {
+                self.refresh_history_context_menu_state();
+            } else if self.menu_matches_preferences_devices_context_menu(menu) {
+                self.refresh_preferences_device_actions();
+            }
+        }
+    }
+
     unsafe impl NSControlTextEditingDelegate for AppDelegate {
         #[unsafe(method(controlTextDidChange:))]
         fn control_text_did_change(&self, notification: &NSNotification) {
@@ -198,6 +231,18 @@ define_class!(
                 true
             } else if command_selector == sel!(cancelOperation:) {
                 self.hide_panel(true);
+                true
+            } else if (command_selector == sel!(deleteToBeginningOfLine:)
+                || command_selector == sel!(deleteToBeginningOfParagraph:))
+                && NSApplication::sharedApplication(self.mtm())
+                    .currentEvent()
+                    .is_some_and(|event| {
+                        event
+                            .modifierFlags()
+                            .contains(NSEventModifierFlags::Command)
+                    })
+            {
+                self.perform_clear_history_action();
                 true
             } else {
                 false
@@ -291,197 +336,151 @@ define_class!(
     impl AppDelegate {
         #[unsafe(method(statusItemAction:))]
         fn status_item_action(&self, _sender: Option<&AnyObject>) {
-            self.handle_status_item_click();
+            self.perform_status_item_action();
         }
 
         #[unsafe(method(tick:))]
         fn tick_action(&self, _timer: &NSTimer) {
-            while let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
-                if event.state == HotKeyState::Released {
-                    self.toggle_panel();
-                }
-            }
-
-            let outcome = {
-                let mut controller = self.ivars().controller.borrow_mut();
-                controller.tick()
-            };
-
-            if outcome.history_changed && self.panel_visible() {
-                self.reload_filtered_rows();
-            }
-            if outcome.preferences_changed()
-                && self
-                    .preferences_window()
-                    .is_some_and(|window| window.isVisible())
-            {
-                self.refresh_preferences_runtime_state();
-            }
+            self.perform_tick(_timer);
         }
 
         #[unsafe(method(activateSelected:))]
         fn activate_selected_action(&self, sender: Option<&AnyObject>) {
-            self.activate_clicked_or_selected(sender);
+            self.perform_activate_selected_action(sender);
         }
 
         #[unsafe(method(deleteHistoryItem:))]
         fn delete_history_item_action(&self, sender: Option<&AnyObject>) {
-            let row = sender
-                .map(|sender| unsafe { msg_send![sender, tag] })
-                .filter(|tag: &NSInteger| *tag >= 0)
-                .map(|tag| tag as usize)
-                .or_else(|| self.context_history_row())
-                .or_else(|| self.ivars().selected_row.borrow().as_ref().copied());
-
-            if let Some(row) = row {
-                self.delete_history_row(row);
-            }
+            self.perform_delete_history_item_action(sender);
         }
 
         #[unsafe(method(toggleHistoryItemPin:))]
         fn toggle_history_item_pin_action(&self, sender: Option<&AnyObject>) {
-            let row = sender
-                .map(|sender| unsafe { msg_send![sender, tag] })
-                .filter(|tag: &NSInteger| *tag >= 0)
-                .map(|tag| tag as usize)
-                .or_else(|| self.context_history_row())
-                .or_else(|| self.ivars().selected_row.borrow().as_ref().copied());
+            self.perform_toggle_history_item_pin_action(sender);
+        }
 
-            let Some(row) = row else {
-                return;
-            };
-            self.toggle_history_row_pin(row);
+        #[unsafe(method(openHistoryItemParentFolders:))]
+        fn open_history_item_parent_folders_action(&self, sender: Option<&AnyObject>) {
+            self.perform_open_history_item_parent_folders_action(sender);
         }
 
         #[unsafe(method(clearHistory:))]
         fn clear_history_action(&self, _sender: Option<&AnyObject>) {
-            let _ = self.ivars().controller.borrow_mut().clear_history();
-            self.reload_filtered_rows();
-            self.refresh_preferences_runtime_state();
+            self.perform_clear_history_action();
         }
 
         #[unsafe(method(openPreferences:))]
         fn open_preferences_action(&self, _sender: Option<&AnyObject>) {
-            self.show_preferences_window();
+            self.perform_open_preferences_action();
         }
 
         #[unsafe(method(openAbout:))]
         fn open_about_action(&self, _sender: Option<&AnyObject>) {
-            self.show_about_window();
+            self.perform_open_about_action();
+        }
+
+        #[unsafe(method(historyScopeChanged:))]
+        fn history_scope_changed_action(&self, _sender: Option<&AnyObject>) {
+            self.perform_history_scope_changed_action();
         }
 
         #[unsafe(method(closeAbout:))]
         fn close_about_action(&self, _sender: Option<&AnyObject>) {
-            self.hide_about_window();
+            self.perform_close_about_action();
         }
 
         #[unsafe(method(activateMenuHistory:))]
         fn activate_menu_history_action(&self, sender: Option<&AnyObject>) {
-            let Some(sender) = sender else {
-                return;
-            };
-            let tag: NSInteger = unsafe { msg_send![sender, tag] };
-            let Some(id) = self
-                .ivars()
-                .menu_history_ids
-                .borrow()
-                .get(tag.max(0) as usize)
-                .copied()
-            else {
-                return;
-            };
-
-            if self.ivars().controller.borrow_mut().copy_item(id).ok() == Some(true) {
-                self.trigger_immediate_paste();
-            }
+            self.perform_activate_menu_history_action(sender);
         }
 
         #[unsafe(method(savePreferences:))]
         fn save_preferences_action(&self, _sender: Option<&AnyObject>) {
-            self.save_preferences();
+            self.perform_save_preferences_action();
         }
 
         #[unsafe(method(closePreferences:))]
         fn close_preferences_action(&self, _sender: Option<&AnyObject>) {
-            self.hide_preferences_window();
+            self.perform_close_preferences_action();
         }
 
         #[unsafe(method(preferencesChanged:))]
         fn preferences_changed_action(&self, _sender: Option<&AnyObject>) {
-            self.sync_preferences_form_state();
+            self.perform_preferences_changed_action();
         }
 
         #[unsafe(method(toggleHotkeyCapture:))]
         fn toggle_hotkey_capture_action(&self, _sender: Option<&AnyObject>) {
-            self.toggle_hotkey_capture();
+            self.perform_toggle_hotkey_capture_action();
         }
 
         #[unsafe(method(trustSelectedDevice:))]
         fn trust_selected_device_action(&self, _sender: Option<&AnyObject>) {
-            let Some(device_id) = self
-                .ivars()
-                .preferences_selected_device_id
-                .borrow()
-                .clone()
-            else {
-                self.set_preferences_status("请选择一个在线设备。");
-                return;
-            };
-
-            match self.ivars().controller.borrow_mut().trust_device(&device_id) {
-                Ok(true) => self.refresh_preferences_runtime_state(),
-                Ok(false) => self.set_preferences_status("仅支持信任当前在线设备。"),
-                Err(error) => self.set_preferences_status(format!("信任设备失败: {error}")),
-            }
+            self.perform_trust_selected_device_action();
         }
 
         #[unsafe(method(revokeSelectedDevice:))]
         fn revoke_selected_device_action(&self, _sender: Option<&AnyObject>) {
-            let Some(device_id) = self
-                .ivars()
-                .preferences_selected_device_id
-                .borrow()
-                .clone()
-            else {
-                self.set_preferences_status("请选择一个已信任设备。");
-                return;
-            };
+            self.perform_revoke_selected_device_action();
+        }
 
-            match self.ivars().controller.borrow_mut().revoke_device_trust(&device_id) {
-                Ok(true) => self.refresh_preferences_runtime_state(),
-                Ok(false) => self.set_preferences_status("未找到对应的信任设备。"),
-                Err(error) => {
-                    self.set_preferences_status(format!("移除信任设备失败: {error}"))
-                }
-            }
+        #[unsafe(method(showSelectedDeviceProperties:))]
+        fn show_selected_device_properties_action(&self, _sender: Option<&AnyObject>) {
+            self.perform_show_selected_device_properties_action();
         }
 
         #[unsafe(method(quitApp:))]
         fn quit_app_action(&self, _sender: Option<&AnyObject>) {
-            let app = NSApplication::sharedApplication(self.mtm());
-            app.terminate(None);
+            self.perform_quit_app_action();
         }
     }
 );
 
 impl AppDelegate {
+    fn with_controller<R>(&self, f: impl FnOnce(&AppController) -> R) -> R {
+        let controller = self.ivars().controller.borrow();
+        f(&controller)
+    }
+
+    fn with_controller_mut<R>(&self, f: impl FnOnce(&mut AppController) -> R) -> R {
+        let mut controller = self.ivars().controller.borrow_mut();
+        f(&mut controller)
+    }
+
+    fn report_controller_status(&self, message: impl Into<String>) {
+        let message = message.into();
+        self.with_controller_mut(|controller| controller.report_status(message));
+    }
+
     fn new(mtm: MainThreadMarker, controller: AppController) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(AppDelegateIvars {
             controller: RefCell::new(controller),
             search_query: RefCell::new(String::new()),
+            history_scope_key: RefCell::new(HistoryScope::All.key()),
+            history_scope_options: RefCell::new(Vec::new()),
             filtered_rows: RefCell::new(Vec::new()),
             selected_row: RefCell::new(None),
+            selected_history_ids: RefCell::new(Vec::new()),
             preferences_baseline: RefCell::new(None),
             preferences_hotkey_value: RefCell::new(String::new()),
             menu_history_ids: RefCell::new(Vec::new()),
             previous_frontmost_bundle_id: RefCell::new(None),
+            active_trust_prompt_id: RefCell::new(None),
             status_item: OnceCell::new(),
             status_menu: OnceCell::new(),
             history_context_menu: RefCell::new(None),
+            history_context_separator_item: RefCell::new(None),
+            history_context_pin_item: RefCell::new(None),
+            history_context_open_folder_item: RefCell::new(None),
+            history_context_delete_item: RefCell::new(None),
             panel: RefCell::new(None),
             about_window: RefCell::new(None),
             search_field: RefCell::new(None),
+            history_scope_button: RefCell::new(None),
             table_view: RefCell::new(None),
+            panel_status_label: RefCell::new(None),
+            panel_progress_track: RefCell::new(None),
+            panel_progress_fill: RefCell::new(None),
             preferences_window: RefCell::new(None),
             preferences_status_label: RefCell::new(None),
             preferences_save_button: RefCell::new(None),
@@ -497,8 +496,10 @@ impl AppDelegate {
             preferences_devices_table: RefCell::new(None),
             preferences_devices_rows: RefCell::new(Vec::new()),
             preferences_selected_device_id: RefCell::new(None),
-            preferences_trust_device_button: RefCell::new(None),
-            preferences_revoke_device_button: RefCell::new(None),
+            preferences_selected_device_ids: RefCell::new(Vec::new()),
+            preferences_devices_context_menu: RefCell::new(None),
+            preferences_devices_context_action_item: RefCell::new(None),
+            preferences_devices_context_properties_item: RefCell::new(None),
             hotkey_manager: RefCell::new(None),
             hotkey: RefCell::new(None),
             hotkey_capture_monitor: RefCell::new(None),
@@ -506,189 +507,6 @@ impl AppDelegate {
         });
 
         unsafe { msg_send![super(this), init] }
-    }
-
-    fn panel(&self) -> Option<Retained<NSPanel>> {
-        self.ivars().panel.borrow().clone()
-    }
-
-    fn search_field(&self) -> Option<Retained<NSSearchField>> {
-        self.ivars().search_field.borrow().clone()
-    }
-
-    fn about_window(&self) -> Option<Retained<NSWindow>> {
-        self.ivars().about_window.borrow().clone()
-    }
-
-    fn table_view(&self) -> Option<Retained<NSTableView>> {
-        self.ivars().table_view.borrow().clone()
-    }
-
-    fn status_item(&self) -> Option<&NSStatusItem> {
-        self.ivars().status_item.get().map(|item| &**item)
-    }
-
-    fn status_menu(&self) -> Option<&NSMenu> {
-        self.ivars().status_menu.get().map(|menu| &**menu)
-    }
-
-    fn preferences_window(&self) -> Option<Retained<NSWindow>> {
-        self.ivars().preferences_window.borrow().clone()
-    }
-
-    fn preferences_status_label(&self) -> Option<Retained<NSTextField>> {
-        self.ivars().preferences_status_label.borrow().clone()
-    }
-
-    fn preferences_save_button(&self) -> Option<Retained<NSButton>> {
-        self.ivars().preferences_save_button.borrow().clone()
-    }
-
-    fn preferences_device_name_field(&self) -> Option<Retained<NSTextField>> {
-        self.ivars().preferences_device_name_field.borrow().clone()
-    }
-
-    fn preferences_history_limit_field(&self) -> Option<Retained<NSTextField>> {
-        self.ivars()
-            .preferences_history_limit_field
-            .borrow()
-            .clone()
-    }
-
-    fn preferences_hotkey_field(&self) -> Option<Retained<NSTextField>> {
-        self.ivars().preferences_hotkey_field.borrow().clone()
-    }
-
-    fn preferences_hotkey_record_button(&self) -> Option<Retained<NSButton>> {
-        self.ivars()
-            .preferences_hotkey_record_button
-            .borrow()
-            .clone()
-    }
-
-    fn preferences_hotkey_preview_label(&self) -> Option<Retained<NSTextField>> {
-        self.ivars()
-            .preferences_hotkey_preview_label
-            .borrow()
-            .clone()
-    }
-
-    fn preferences_launch_at_login_checkbox(&self) -> Option<Retained<NSButton>> {
-        self.ivars()
-            .preferences_launch_at_login_checkbox
-            .borrow()
-            .clone()
-    }
-
-    fn preferences_share_checkbox(&self) -> Option<Retained<NSButton>> {
-        self.ivars().preferences_share_checkbox.borrow().clone()
-    }
-
-    fn preferences_prefer_remote_paste_checkbox(&self) -> Option<Retained<NSButton>> {
-        self.ivars()
-            .preferences_prefer_remote_paste_checkbox
-            .borrow()
-            .clone()
-    }
-
-    fn preferences_discovery_checkbox(&self) -> Option<Retained<NSButton>> {
-        self.ivars().preferences_discovery_checkbox.borrow().clone()
-    }
-
-    fn preferences_devices_table(&self) -> Option<Retained<NSTableView>> {
-        self.ivars().preferences_devices_table.borrow().clone()
-    }
-
-    fn preferences_trust_device_button(&self) -> Option<Retained<NSButton>> {
-        self.ivars()
-            .preferences_trust_device_button
-            .borrow()
-            .clone()
-    }
-
-    fn preferences_revoke_device_button(&self) -> Option<Retained<NSButton>> {
-        self.ivars()
-            .preferences_revoke_device_button
-            .borrow()
-            .clone()
-    }
-
-    fn object_matches_search_field(&self, object: &AnyObject) -> bool {
-        self.search_field().is_some_and(|field| {
-            std::ptr::eq(
-                object as *const AnyObject,
-                field.as_ref() as *const NSSearchField as *const AnyObject,
-            )
-        })
-    }
-
-    fn object_matches_history_table(&self, object: &AnyObject) -> bool {
-        self.table_view().is_some_and(|table| {
-            std::ptr::eq(
-                object as *const AnyObject,
-                table.as_ref() as *const NSTableView as *const AnyObject,
-            )
-        })
-    }
-
-    fn object_matches_preferences_devices_table(&self, object: &AnyObject) -> bool {
-        self.preferences_devices_table().is_some_and(|table| {
-            std::ptr::eq(
-                object as *const AnyObject,
-                table.as_ref() as *const NSTableView as *const AnyObject,
-            )
-        })
-    }
-
-    fn table_matches_preferences_devices_table(&self, table_view: &NSTableView) -> bool {
-        self.preferences_devices_table()
-            .is_some_and(|table| std::ptr::eq(table.as_ref(), table_view))
-    }
-
-    fn object_matches_preferences_field(&self, object: &AnyObject) -> bool {
-        self.preferences_device_name_field().is_some_and(|field| {
-            std::ptr::eq(
-                object as *const AnyObject,
-                field.as_ref() as *const NSTextField as *const AnyObject,
-            )
-        }) || self.preferences_history_limit_field().is_some_and(|field| {
-            std::ptr::eq(
-                object as *const AnyObject,
-                field.as_ref() as *const NSTextField as *const AnyObject,
-            )
-        })
-    }
-
-    fn window_matches_panel(&self, window: &NSWindow) -> bool {
-        self.panel()
-            .is_some_and(|panel| std::ptr::eq(window, panel.as_ref()))
-    }
-
-    fn window_matches_preferences(&self, window: &NSWindow) -> bool {
-        self.preferences_window()
-            .is_some_and(|preferences| std::ptr::eq(window, preferences.as_ref()))
-    }
-
-    fn window_matches_about(&self, window: &NSWindow) -> bool {
-        self.about_window()
-            .is_some_and(|about| std::ptr::eq(window, about.as_ref()))
-    }
-
-    fn capture_frontmost_application(&self) {
-        let bundle_id = NSWorkspace::sharedWorkspace()
-            .frontmostApplication()
-            .and_then(|app| app.bundleIdentifier())
-            .map(|bundle| bundle.to_string())
-            .filter(|bundle| !bundle.is_empty());
-        *self.ivars().previous_frontmost_bundle_id.borrow_mut() = bundle_id;
-    }
-
-    fn trigger_immediate_paste(&self) {
-        paste::trigger_immediate_paste(self.ivars().previous_frontmost_bundle_id.borrow().clone());
-    }
-
-    fn panel_visible(&self) -> bool {
-        self.panel().is_some_and(|panel| panel.isVisible())
     }
 }
 
@@ -702,7 +520,7 @@ pub(crate) fn create_local_data_cipher(
     keychain::create_local_data_cipher(paths)
 }
 
-pub fn run(controller: AppController) -> PlatformResult {
+pub(super) fn run(controller: AppController) -> PlatformResult {
     let mtm = MainThreadMarker::new().ok_or("AppKit 必须在主线程中运行。")?;
     let app = NSApplication::sharedApplication(mtm);
     let delegate = AppDelegate::new(mtm, controller);

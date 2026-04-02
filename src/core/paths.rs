@@ -1,8 +1,13 @@
 use std::{fs, path::PathBuf};
 
-#[cfg(not(target_os = "macos"))]
-use crate::constants::crypto::LOCAL_DATA_KEY_FILE_NAME;
-use crate::core::error::AppResult;
+use crate::{
+    constants::storage::{
+        CONFIG_FILE_NAME, DEVICE_CERT_FILE_NAME, DEVICE_KEY_FILE_NAME, HISTORY_DB_FILE_NAME,
+        INBOX_DIR_NAME,
+    },
+    core::error::AppResult,
+};
+use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct AppPaths {
@@ -12,20 +17,16 @@ pub struct AppPaths {
     pub cert_der: PathBuf,
     pub key_der: PathBuf,
     pub inbox_dir: PathBuf,
-    #[cfg(not(target_os = "macos"))]
-    pub local_data_key_file: PathBuf,
 }
 
 impl AppPaths {
     pub fn from_root(root: PathBuf) -> Self {
         Self {
-            config_file: root.join("config.json"),
-            history_db: root.join("history.sqlite3"),
-            cert_der: root.join("device.cert.der"),
-            key_der: root.join("device.key.der"),
-            inbox_dir: root.join("incoming"),
-            #[cfg(not(target_os = "macos"))]
-            local_data_key_file: root.join(LOCAL_DATA_KEY_FILE_NAME),
+            config_file: root.join(CONFIG_FILE_NAME),
+            history_db: root.join(HISTORY_DB_FILE_NAME),
+            cert_der: root.join(DEVICE_CERT_FILE_NAME),
+            key_der: root.join(DEVICE_KEY_FILE_NAME),
+            inbox_dir: root.join(INBOX_DIR_NAME),
             root,
         }
     }
@@ -35,5 +36,9 @@ impl AppPaths {
             fs::create_dir_all(dir)?;
         }
         Ok(())
+    }
+
+    pub fn remote_item_dir(&self, item_id: Uuid) -> PathBuf {
+        self.inbox_dir.join(item_id.to_string())
     }
 }

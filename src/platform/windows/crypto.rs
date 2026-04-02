@@ -27,8 +27,10 @@ pub(super) fn create_local_data_cipher(paths: &AppPaths) -> AppResult<LocalDataC
 }
 
 fn load_or_create_local_data_key(paths: &AppPaths) -> AppResult<[u8; LOCAL_DATA_KEY_BYTES]> {
-    if paths.local_data_key_file.exists() {
-        let protected = fs::read(&paths.local_data_key_file)?;
+    let key_path = local_data_key_path(paths);
+
+    if key_path.exists() {
+        let protected = fs::read(&key_path)?;
         let plaintext = unprotect_bytes(&protected)?;
         return plaintext.try_into().map_err(|_| {
             AppError::Crypto(format!(
@@ -43,13 +45,15 @@ fn load_or_create_local_data_key(paths: &AppPaths) -> AppResult<[u8; LOCAL_DATA_
         .map_err(|_| AppError::Crypto("Failed to generate a local data key.".to_string()))?;
 
     let protected = protect_bytes(&key_bytes)?;
-    let temp_path = paths
-        .local_data_key_file
-        .with_file_name(format!("{LOCAL_DATA_KEY_FILE_NAME}.tmp"));
+    let temp_path = key_path.with_file_name(format!("{LOCAL_DATA_KEY_FILE_NAME}.tmp"));
     fs::write(&temp_path, protected)?;
-    fs::rename(&temp_path, &paths.local_data_key_file)?;
+    fs::rename(&temp_path, &key_path)?;
 
     Ok(key_bytes)
+}
+
+fn local_data_key_path(paths: &AppPaths) -> std::path::PathBuf {
+    paths.root.join(LOCAL_DATA_KEY_FILE_NAME)
 }
 
 fn protect_bytes(plaintext: &[u8]) -> AppResult<Vec<u8>> {

@@ -12,6 +12,7 @@ pub enum AppError {
     Sql(#[from] rusqlite::Error),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+    #[cfg_attr(target_os = "android", allow(dead_code))]
     #[error("Clipboard error: {0}")]
     Clipboard(String),
     #[error("Network error: {0}")]

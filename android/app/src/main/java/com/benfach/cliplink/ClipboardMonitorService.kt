@@ -11,40 +11,45 @@ import android.content.Intent
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
-import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import java.util.concurrent.atomic.AtomicBoolean
 
 class ClipboardMonitorService : Service() {
     private lateinit var clipboardManager: ClipboardManager
-    private val mainHandler = Handler(Looper.getMainLooper())
+    private lateinit var workerThread: HandlerThread
+    private lateinit var workerHandler: Handler
     private var multicastLock: WifiManager.MulticastLock? = null
     private var listenerRegistered = false
+    private var lastReportedRuntimeError: String? = null
+    private val clipboardDirty = AtomicBoolean(true)
+    private var idleTickCount = 0
 
     private val clipboardListener = ClipboardManager.OnPrimaryClipChangedListener {
-        ClipboardInterop.submitCurrentClipboard(this, clipboardManager)
-        notifyStateChanged()
-        tickRuntime()
+        clipboardDirty.set(true)
+        runTickNow()
     }
 
     private val tickRunnable = object : Runnable {
         override fun run() {
-            tickRuntime()
-            mainHandler.postDelayed(this, SERVICE_TICK_INTERVAL_MS)
+            val nextDelayMs = tickRuntime()
+            scheduleNextTick(nextDelayMs)
         }
     }
 
     override fun onCreate() {
         super.onCreate()
         clipboardManager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        workerThread = HandlerThread("cliplink-runtime")
+        workerThread.start()
+        workerHandler = Handler(workerThread.looper)
         startForeground(NOTIFICATION_ID, buildNotification())
+        acquireMulticastLock()
         bootstrapBridge()
         registerClipboardListener()
-        acquireMulticastLock()
-        ClipboardInterop.submitCurrentClipboard(this, clipboardManager)
-        tickRuntime()
-        mainHandler.post(tickRunnable)
+        runTickNow()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -57,7 +62,12 @@ class ClipboardMonitorService : Service() {
             clipboardManager.removePrimaryClipChangedListener(clipboardListener)
             listenerRegistered = false
         }
-        mainHandler.removeCallbacks(tickRunnable)
+        if (::workerHandler.isInitialized) {
+            workerHandler.removeCallbacks(tickRunnable)
+        }
+        if (::workerThread.isInitialized) {
+            workerThread.quitSafely()
+        }
         releaseMulticastLock()
     }
 
@@ -75,22 +85,72 @@ class ClipboardMonitorService : Service() {
         listenerRegistered = true
     }
 
-    private fun tickRuntime() {
+    private fun runTickNow() {
+        if (!::workerHandler.isInitialized) {
+            return
+        }
+        workerHandler.removeCallbacks(tickRunnable)
+        workerHandler.post(tickRunnable)
+    }
+
+    private fun scheduleNextTick(delayMs: Long) {
+        workerHandler.removeCallbacks(tickRunnable)
+        workerHandler.postDelayed(tickRunnable, delayMs.coerceAtLeast(0L))
+    }
+
+    private fun tickRuntime(): Long {
+        val clipboardSubmission = if (clipboardDirty.compareAndSet(true, false)) {
+            ClipboardInterop.submitCurrentClipboard(this, clipboardManager)
+        } else {
+            ClipboardInterop.ClipboardSubmissionResult(submitted = false, error = null)
+        }
         val result = RustBridge.tick()
+        val runtimeError = clipboardSubmission.error ?: result.error
         ClipboardInterop.applyPendingClipboard(this, clipboardManager, result.pendingClipboard)
+        val errorChanged = runtimeError != lastReportedRuntimeError
+        if (errorChanged) {
+            lastReportedRuntimeError = runtimeError
+        }
+        val localHistoryChanged = clipboardSubmission.submitted
+        val clipboardAwaitingForeground = clipboardSubmission.requiresForegroundAccess
+        val hasVisibleActivity =
+            localHistoryChanged ||
+                result.pendingClipboard != null ||
+                result.historyChanged ||
+                result.devicesChanged ||
+                result.statusChanged ||
+                result.transferChanged ||
+                errorChanged
+        idleTickCount = if (hasVisibleActivity) {
+            0
+        } else {
+            (idleTickCount + 1).coerceAtMost(MAX_IDLE_TICK_COUNT)
+        }
         if (
+            localHistoryChanged ||
             result.pendingClipboard != null ||
             result.historyChanged ||
             result.devicesChanged ||
             result.statusChanged ||
-            result.error != null
+            result.transferChanged ||
+            errorChanged
         ) {
-            notifyStateChanged()
+            notifyStateChanged(runtimeError)
+        }
+        return when {
+            hasVisibleActivity -> ACTIVE_TICK_INTERVAL_MS
+            clipboardAwaitingForeground -> QUIET_TICK_INTERVAL_MS
+            idleTickCount <= 2 -> QUIET_TICK_INTERVAL_MS
+            else -> IDLE_TICK_INTERVAL_MS
         }
     }
 
-    private fun notifyStateChanged() {
-        sendBroadcast(Intent(ACTION_STATE_CHANGED).setPackage(packageName))
+    private fun notifyStateChanged(runtimeError: String? = null) {
+        val intent = Intent(ACTION_STATE_CHANGED).setPackage(packageName)
+        if (!runtimeError.isNullOrBlank()) {
+            intent.putExtra(EXTRA_RUNTIME_ERROR, runtimeError)
+        }
+        sendBroadcast(intent)
     }
 
     private fun acquireMulticastLock() {
@@ -99,7 +159,7 @@ class ClipboardMonitorService : Service() {
             return
         }
         if (multicastLock == null) {
-            multicastLock = wifiManager.createMulticastLock("cliplink-mdns").apply {
+            multicastLock = wifiManager.createMulticastLock("cliplink-discovery").apply {
                 setReferenceCounted(false)
             }
         }
@@ -156,10 +216,14 @@ class ClipboardMonitorService : Service() {
 
     companion object {
         const val ACTION_STATE_CHANGED = "com.benfach.cliplink.ACTION_STATE_CHANGED"
+        const val EXTRA_RUNTIME_ERROR = "com.benfach.cliplink.EXTRA_RUNTIME_ERROR"
 
         private const val NOTIFICATION_CHANNEL_ID = "cliplink.background.sync"
         private const val NOTIFICATION_ID = 1001
-        private const val SERVICE_TICK_INTERVAL_MS = 1200L
+        private const val ACTIVE_TICK_INTERVAL_MS = 120L
+        private const val QUIET_TICK_INTERVAL_MS = 320L
+        private const val IDLE_TICK_INTERVAL_MS = 720L
+        private const val MAX_IDLE_TICK_COUNT = 8
 
         fun start(context: Context) {
             val intent = Intent(context, ClipboardMonitorService::class.java)

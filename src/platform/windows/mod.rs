@@ -3,10 +3,7 @@ mod crypto;
 mod hotkey;
 mod paste;
 
-use std::{env, mem::size_of, path::PathBuf, ptr::null_mut};
-
-use agnostic_mdns::hostname;
-use directories::ProjectDirs;
+use std::{mem::size_of, ptr::null_mut};
 use windows_sys::Win32::{
     Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
     Graphics::Gdi::{DEFAULT_GUI_FONT, GetStockObject, GetSysColorBrush, HGDIOBJ},
@@ -17,42 +14,44 @@ use windows_sys::Win32::{
     UI::{
         Controls::{
             HKM_GETHOTKEY, HKM_SETHOTKEY, ICC_STANDARD_CLASSES, ICC_TAB_CLASSES, ICC_WIN95_CLASSES,
-            INITCOMMONCONTROLSEX, InitCommonControlsEx, NMHDR, TCIF_TEXT, TCITEMW, TCM_GETCURSEL,
-            TCM_INSERTITEMW, TCN_SELCHANGE,
+            INITCOMMONCONTROLSEX, InitCommonControlsEx, NMHDR, TASKDIALOG_BUTTON, TASKDIALOGCONFIG,
+            TASKDIALOGCONFIG_0, TCIF_TEXT, TCITEMW, TCM_GETCURSEL, TCM_INSERTITEMW, TCN_SELCHANGE,
+            TD_WARNING_ICON, TaskDialogIndirect,
         },
-        Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey},
+        Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey, VK_BACK, VK_CONTROL},
         Shell::{
             NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
         },
         WindowsAndMessaging::{
             AppendMenuW, BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_PUSHBUTTON,
-            BST_CHECKED, BST_UNCHECKED, COLOR_WINDOW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW,
+            BST_CHECKED, BST_UNCHECKED, CB_ADDSTRING, CB_GETCURSEL, CB_RESETCONTENT, CB_SETCURSEL,
+            CBN_SELCHANGE, CBS_DROPDOWNLIST, COLOR_WINDOW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW,
             CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
             DestroyWindow, DispatchMessageW, EM_SETLIMITTEXT, EN_CHANGE, EnableWindow,
-            GWLP_USERDATA, GetClientRect, GetCursorPos, GetMessageW, GetWindowLongPtrW,
-            GetWindowTextLengthW, GetWindowTextW, HCURSOR, HICON, HMENU, IDC_ARROW,
-            IDI_APPLICATION, IsWindowVisible, LB_ADDSTRING, LB_GETCURSEL, LB_GETTOPINDEX,
-            LB_RESETCONTENT, LB_SETCURSEL, LB_SETTOPINDEX, LBN_DBLCLK, LBN_SELCHANGE,
-            LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, LoadCursorW, LoadIconW, MB_ICONINFORMATION, MB_OK,
-            MF_SEPARATOR, MF_STRING, MSG, MessageBoxW, MoveWindow, PostQuitMessage, RegisterClassW,
-            SPI_GETWORKAREA, SW_HIDE, SW_SHOW, SW_SHOWNORMAL, SendMessageW, SetFocus,
-            SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
-            SystemParametersInfoW, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
-            TranslateMessage, UpdateWindow, WA_INACTIVE, WM_ACTIVATE, WM_APP, WM_CLIPBOARDUPDATE,
-            WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_HOTKEY, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY,
-            WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD,
-            WS_EX_CLIENTEDGE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_OVERLAPPED, WS_POPUP, WS_SYSMENU,
-            WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+            GWLP_USERDATA, GetClientRect, GetCursorPos, GetKeyState, GetMessageW,
+            GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, HCURSOR, HICON, HMENU,
+            IDC_ARROW, IDI_APPLICATION, IDYES, IsWindowVisible, LB_ADDSTRING, LB_GETCURSEL,
+            LB_GETTOPINDEX, LB_RESETCONTENT, LB_SETCURSEL, LB_SETTOPINDEX, LBN_DBLCLK,
+            LBN_SELCHANGE, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, LoadCursorW, LoadIconW,
+            MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MB_YESNO, MF_SEPARATOR, MF_STRING, MSG,
+            MessageBoxW, MoveWindow, PostQuitMessage, RegisterClassW, SPI_GETWORKAREA, SW_HIDE,
+            SW_SHOW, SW_SHOWNORMAL, SendMessageW, SetFocus, SetForegroundWindow, SetTimer,
+            SetWindowLongPtrW, SetWindowTextW, ShowWindow, SystemParametersInfoW, TPM_LEFTALIGN,
+            TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, UpdateWindow,
+            WA_INACTIVE, WM_ACTIVATE, WM_APP, WM_CLIPBOARDUPDATE, WM_CLOSE, WM_COMMAND, WM_DESTROY,
+            WM_HOTKEY, WM_KEYDOWN, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_SETFONT, WM_SIZE,
+            WM_TIMER, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_CLIENTEDGE,
+            WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_OVERLAPPED, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
+            WS_VISIBLE, WS_VSCROLL,
         },
     },
 };
 
 use crate::{
-    constants::app::{
-        APP_NAME, ORGANIZATION_NAME, ORGANIZATION_QUALIFIER, PRODUCT_DIR_NAME, STORAGE_DIR_NAME,
-    },
+    constants::app::APP_NAME,
     controller::{
-        AppController, HistoryRow, SettingsDeviceEntry, SettingsSnapshot, SettingsUpdate,
+        AppController, HistoryActivation, HistoryRow, HistoryScope, HistoryScopeOption,
+        SettingsDeviceEntry, SettingsSnapshot, SettingsUpdate,
     },
     core::{
         at_rest::LocalDataCipher,
@@ -91,13 +90,14 @@ const WINDOW_HEIGHT_PREFERENCES: i32 = 500;
 const UI_TICK_INTERVAL_MS: u32 = 250;
 
 const ID_HISTORY_SEARCH: i32 = 1001;
-const ID_HISTORY_LIST: i32 = 1002;
-const ID_HISTORY_DETAIL: i32 = 1003;
-const ID_HISTORY_HOTKEY: i32 = 1004;
-const ID_HISTORY_CLEAR: i32 = 1005;
-const ID_HISTORY_DELETE: i32 = 1006;
-const ID_HISTORY_PREFERENCES: i32 = 1007;
-const ID_HISTORY_QUIT: i32 = 1008;
+const ID_HISTORY_SCOPE: i32 = 1002;
+const ID_HISTORY_LIST: i32 = 1003;
+const ID_HISTORY_DETAIL: i32 = 1004;
+const ID_HISTORY_HOTKEY: i32 = 1005;
+const ID_HISTORY_CLEAR: i32 = 1006;
+const ID_HISTORY_DELETE: i32 = 1007;
+const ID_HISTORY_PREFERENCES: i32 = 1008;
+const ID_HISTORY_QUIT: i32 = 1009;
 
 const ID_PREFS_TAB: i32 = 2001;
 const ID_PREFS_DEVICE_NAME: i32 = 2002;
@@ -136,6 +136,7 @@ struct PreferencesRawState {
 struct HistoryControls {
     hwnd: HWND,
     search: HWND,
+    scope: HWND,
     list: HWND,
     detail: HWND,
     hotkey: HWND,
@@ -173,35 +174,14 @@ struct WindowsApp {
     controller: AppController,
     main_hwnd: HWND,
     history: HistoryControls,
+    history_scope_options: Vec<HistoryScopeOption>,
+    selected_history_scope_key: String,
     preferences: PreferencesControls,
     registered_hotkey: Option<RegisteredHotKey>,
     history_rows: Vec<HistoryRow>,
     preferences_devices: Vec<SettingsDeviceEntry>,
     preferences_baseline_raw: Option<PreferencesRawState>,
     previous_foreground: Option<HWND>,
-}
-
-pub(super) fn device_name_hint() -> Option<String> {
-    hostname()
-        .map(|value| value.to_string())
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .or_else(|| env::var("COMPUTERNAME").ok())
-}
-
-pub(super) fn discover_app_paths() -> AppResult<AppPaths> {
-    let root = ProjectDirs::from(ORGANIZATION_QUALIFIER, ORGANIZATION_NAME, PRODUCT_DIR_NAME)
-        .map(|dirs| dirs.data_local_dir().to_path_buf())
-        .unwrap_or_else(|| {
-            env::current_dir()
-                .unwrap_or_else(|_| PathBuf::from("."))
-                .join(format!(".{STORAGE_DIR_NAME}-data"))
-        });
-
-    let paths = AppPaths::from_root(root);
-    paths.ensure()?;
-    Ok(paths)
 }
 
 pub(super) fn create_clipboard_backend() -> AppResult<Box<dyn ClipboardBackend>> {
@@ -237,6 +217,8 @@ impl WindowsApp {
             controller,
             main_hwnd: 0,
             history: HistoryControls::default(),
+            history_scope_options: Vec::new(),
+            selected_history_scope_key: HistoryScope::All.key(),
             preferences: PreferencesControls::default(),
             registered_hotkey: None,
             history_rows: Vec::new(),
@@ -389,6 +371,9 @@ impl WindowsApp {
     unsafe fn message_loop(&mut self) {
         let mut message = MSG::default();
         while GetMessageW(&mut message, 0, 0, 0) > 0 {
+            if self.consume_history_clear_shortcut(&message) {
+                continue;
+            }
             TranslateMessage(&message);
             DispatchMessageW(&message);
         }
@@ -517,7 +502,7 @@ impl WindowsApp {
 
     unsafe fn tick_controller(&mut self) {
         let outcome = self.controller.tick();
-        if outcome.history_changed
+        if (outcome.history_changed || outcome.devices_changed)
             && self.history.hwnd != 0
             && IsWindowVisible(self.history.hwnd) != 0
         {
@@ -534,6 +519,12 @@ impl WindowsApp {
             && (outcome.devices_changed || outcome.status_changed)
         {
             self.refresh_preferences_devices_and_status();
+        }
+        if outcome.paste_requested {
+            if self.history.hwnd != 0 && IsWindowVisible(self.history.hwnd) != 0 {
+                self.hide_history_popup();
+            }
+            trigger_immediate_paste(self.previous_foreground);
         }
     }
 
@@ -620,6 +611,14 @@ impl WindowsApp {
             WS_EX_CLIENTEDGE,
             ID_HISTORY_SEARCH,
         )?;
+        self.history.scope = self.create_child_window(
+            hwnd,
+            "ComboBox",
+            "",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST as u32,
+            0,
+            ID_HISTORY_SCOPE,
+        )?;
         self.history.list = self.create_child_window(
             hwnd,
             "ListBox",
@@ -647,7 +646,7 @@ impl WindowsApp {
         self.history.clear_button = self.create_child_window(
             hwnd,
             "Button",
-            "清除",
+            "清除（Ctrl+Back）",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
             0,
             ID_HISTORY_CLEAR,
@@ -678,6 +677,7 @@ impl WindowsApp {
         )?;
 
         self.apply_default_font(self.history.search);
+        self.apply_default_font(self.history.scope);
         self.apply_default_font(self.history.list);
         self.apply_default_font(self.history.detail);
         self.apply_default_font(self.history.hotkey);
@@ -686,6 +686,7 @@ impl WindowsApp {
         self.apply_default_font(self.history.preferences_button);
         self.apply_default_font(self.history.quit_button);
         let _ = SendMessageW(self.history.search, EM_SETLIMITTEXT, 256, 0);
+        self.refresh_history_scope_options();
         self.layout_history_controls();
         Ok(())
     }
@@ -917,14 +918,16 @@ impl WindowsApp {
         let width = rect.right - rect.left;
         let height = rect.bottom - rect.top;
         let padding = 12;
+        let scope_width = 132;
         let button_width = 82;
         let button_height = 28;
 
+        let _ = MoveWindow(self.history.scope, padding, padding, scope_width, 28, 1);
         let _ = MoveWindow(
             self.history.search,
+            padding + scope_width + 8,
             padding,
-            padding,
-            width - padding * 2,
+            width - padding * 2 - scope_width - 8,
             28,
             1,
         );
@@ -1196,11 +1199,46 @@ impl WindowsApp {
         );
     }
 
+    unsafe fn refresh_history_scope_options(&mut self) {
+        if self.history.scope == 0 {
+            return;
+        }
+
+        let options = self.controller.history_scope_options();
+        let selected_key = if options
+            .iter()
+            .any(|option| option.key == self.selected_history_scope_key)
+        {
+            self.selected_history_scope_key.clone()
+        } else {
+            HistoryScope::All.key()
+        };
+
+        self.history_scope_options = options;
+        self.selected_history_scope_key = selected_key.clone();
+
+        let _ = SendMessageW(self.history.scope, CB_RESETCONTENT, 0, 0);
+        let mut selected_index = 0usize;
+        for (index, option) in self.history_scope_options.iter().enumerate() {
+            let label = wide(&option.label);
+            let _ = SendMessageW(self.history.scope, CB_ADDSTRING, 0, label.as_ptr() as isize);
+            if option.key == selected_key {
+                selected_index = index;
+            }
+        }
+        let _ = SendMessageW(self.history.scope, CB_SETCURSEL, selected_index, 0);
+    }
+
+    fn selected_history_scope(&self) -> HistoryScope {
+        HistoryScope::from_raw(&self.selected_history_scope_key)
+    }
+
     unsafe fn refresh_history_list(&mut self, preserve_scroll: bool) {
         if self.history.list == 0 {
             return;
         }
 
+        self.refresh_history_scope_options();
         let selected_id = self.selected_history_id();
         let top_index = if preserve_scroll {
             SendMessageW(self.history.list, LB_GETTOPINDEX, 0, 0) as i32
@@ -1208,7 +1246,9 @@ impl WindowsApp {
             0
         };
         let query = self.read_window_text(self.history.search);
-        self.history_rows = self.controller.history_rows(&query);
+        self.history_rows = self
+            .controller
+            .history_rows_with_scope(&query, self.selected_history_scope());
 
         let _ = SendMessageW(self.history.list, LB_RESETCONTENT, 0, 0);
         for row in &self.history_rows {
@@ -1267,6 +1307,17 @@ impl WindowsApp {
             (ID_HISTORY_SEARCH, value) if value == EN_CHANGE as u16 => {
                 self.refresh_history_list(true)
             }
+            (ID_HISTORY_SCOPE, value) if value == CBN_SELCHANGE as u16 => {
+                let selected_index = SendMessageW(self.history.scope, CB_GETCURSEL, 0, 0);
+                if selected_index >= 0 {
+                    if let Some(option) = self.history_scope_options.get(selected_index as usize) {
+                        self.selected_history_scope_key = option.key.clone();
+                    }
+                } else {
+                    self.selected_history_scope_key = HistoryScope::All.key();
+                }
+                self.refresh_history_list(false);
+            }
             (ID_HISTORY_LIST, value) if value == LBN_SELCHANGE as u16 => {
                 self.update_history_detail_label()
             }
@@ -1274,8 +1325,7 @@ impl WindowsApp {
                 self.activate_selected_history_item()
             }
             (ID_HISTORY_CLEAR, value) if value == BN_CLICKED as u16 => {
-                let _ = self.controller.clear_history();
-                self.refresh_history_list(false);
+                self.handle_clear_history_action();
             }
             (ID_HISTORY_DELETE, value) if value == BN_CLICKED as u16 => {
                 if let Some(id) = self.selected_history_id() {
@@ -1289,6 +1339,31 @@ impl WindowsApp {
             (ID_HISTORY_QUIT, value) if value == BN_CLICKED as u16 => self.quit(),
             _ => {}
         }
+    }
+
+    unsafe fn handle_clear_history_action(&mut self) {
+        let Some(include_pinned) = self.confirm_clear_history() else {
+            return;
+        };
+        let _ = self.controller.clear_history_with_options(include_pinned);
+        self.refresh_history_list(false);
+    }
+
+    unsafe fn consume_history_clear_shortcut(&mut self, message: &MSG) -> bool {
+        if message.message != WM_KEYDOWN
+            || message.wParam as u32 != VK_BACK as u32
+            || self.history.hwnd == 0
+            || IsWindowVisible(self.history.hwnd) == 0
+        {
+            return false;
+        }
+
+        if (GetKeyState(VK_CONTROL as i32) & 0x8000) == 0 {
+            return false;
+        }
+
+        self.handle_clear_history_action();
+        true
     }
 
     unsafe fn selected_history_id(&self) -> Option<uuid::Uuid> {
@@ -1311,9 +1386,12 @@ impl WindowsApp {
         let Some(id) = self.selected_history_id() else {
             return;
         };
-        if self.controller.copy_item(id).ok() == Some(true) {
-            self.hide_history_popup();
-            trigger_immediate_paste(self.previous_foreground);
+        match self.controller.copy_item(id) {
+            Ok(HistoryActivation::ClipboardReady) => {
+                self.hide_history_popup();
+                trigger_immediate_paste(self.previous_foreground);
+            }
+            Ok(HistoryActivation::PendingTransfer | HistoryActivation::Noop) | Err(_) => {}
         }
     }
 
@@ -1513,8 +1591,16 @@ impl WindowsApp {
                 }
             }
             (ID_PREFS_REVOKE, value) if value == BN_CLICKED as u16 => {
-                if let Some(device_id) = self.selected_preferences_device_id() {
-                    let _ = self.controller.revoke_device_trust(&device_id);
+                if let Some(device) = self.selected_preferences_device_id().and_then(|device_id| {
+                    self.preferences_devices
+                        .iter()
+                        .find(|device| device.device_id == device_id)
+                        .cloned()
+                }) {
+                    if !self.confirm_revoke_trusted_device(&device.device_name) {
+                        return;
+                    }
+                    let _ = self.controller.revoke_device_trust(&device.device_id);
                     self.refresh_preferences_devices_and_status();
                 }
             }
@@ -1624,6 +1710,95 @@ impl WindowsApp {
             title.as_ptr(),
             MB_OK | MB_ICONINFORMATION,
         );
+    }
+
+    unsafe fn confirm_clear_history(&self) -> Option<bool> {
+        let title = wide("确认清除历史记录");
+        let body = wide("默认仅清除本机未锁定的剪切板历史记录。\n\n远程历史始终保留。");
+        let verification = wide("同时清除锁定条目");
+        let clear = wide("清除");
+        let cancel = wide("取消");
+        let owner = if self.history_hwnd != 0 {
+            self.history_hwnd
+        } else {
+            self.main_hwnd
+        };
+        const ID_TASKDIALOG_CLEAR: i32 = 100;
+        const ID_TASKDIALOG_CANCEL: i32 = 101;
+
+        let buttons = [
+            TASKDIALOG_BUTTON {
+                nButtonID: ID_TASKDIALOG_CLEAR,
+                pszButtonText: clear.as_ptr(),
+            },
+            TASKDIALOG_BUTTON {
+                nButtonID: ID_TASKDIALOG_CANCEL,
+                pszButtonText: cancel.as_ptr(),
+            },
+        ];
+
+        let mut pressed_button = 0i32;
+        let mut selected_radio_button = 0i32;
+        let mut verification_checked = 0i32;
+        let mut config: TASKDIALOGCONFIG = std::mem::zeroed();
+        config.cbSize = size_of::<TASKDIALOGCONFIG>() as u32;
+        config.hwndParent = owner;
+        config.pszWindowTitle = title.as_ptr();
+        config.Anonymous1 = TASKDIALOGCONFIG_0 {
+            pszMainIcon: TD_WARNING_ICON,
+        };
+        config.pszMainInstruction = title.as_ptr();
+        config.pszContent = body.as_ptr();
+        config.cButtons = buttons.len() as u32;
+        config.pButtons = buttons.as_ptr();
+        config.nDefaultButton = ID_TASKDIALOG_CLEAR;
+        config.dwCommonButtons = 0;
+        config.pszVerificationText = verification.as_ptr();
+        config.cxWidth = 220;
+
+        let task_dialog_result = TaskDialogIndirect(
+            &config,
+            &mut pressed_button,
+            &mut selected_radio_button,
+            &mut verification_checked,
+        );
+        if task_dialog_result >= 0 {
+            if pressed_button == ID_TASKDIALOG_CLEAR {
+                return Some(verification_checked != 0);
+            }
+            return None;
+        }
+
+        if MessageBoxW(
+            owner,
+            body.as_ptr(),
+            title.as_ptr(),
+            MB_YESNO | MB_ICONWARNING,
+        ) == IDYES
+        {
+            Some(false)
+        } else {
+            None
+        }
+    }
+
+    unsafe fn confirm_revoke_trusted_device(&self, device_name: &str) -> bool {
+        let title = wide("确认移除信任设备");
+        let body = wide(&format!(
+            "将移除与“{}”的信任关系，并通知对方同步解除信任。\n\n移除后需重新发起连接请求才能再次共享。",
+            device_name
+        ));
+        let owner = if self.preferences_hwnd != 0 {
+            self.preferences_hwnd
+        } else {
+            self.main_hwnd
+        };
+        MessageBoxW(
+            owner,
+            body.as_ptr(),
+            title.as_ptr(),
+            MB_YESNO | MB_ICONWARNING,
+        ) == IDYES
     }
 
     unsafe fn quit(&mut self) {

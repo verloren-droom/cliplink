@@ -9,6 +9,7 @@ plugins {
 android {
     namespace = "com.benfach.cliplink"
     compileSdk = 34
+    ndkVersion = "26.3.11579264"
 
     defaultConfig {
         applicationId = "com.benfach.cliplink"

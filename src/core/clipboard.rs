@@ -54,6 +54,7 @@ pub fn build_item_from_text(
     }
 }
 
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn build_item_from_paths(
     paths: &[PathBuf],
     source_device_id: Option<String>,

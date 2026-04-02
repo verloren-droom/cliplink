@@ -10,7 +10,7 @@ use windows_sys::Win32::{
     },
 };
 
-use crate::constants::timing::MACOS_IMMEDIATE_PASTE_DELAY;
+use crate::constants::timing::IMMEDIATE_PASTE_DELAY;
 
 const VIRTUAL_KEY_V: u8 = b'V';
 
@@ -37,7 +37,7 @@ pub(super) fn trigger_immediate_paste(previous_foreground: Option<HWND>) {
             }
 
             thread::sleep(Duration::from_millis(
-                MACOS_IMMEDIATE_PASTE_DELAY.as_millis() as u64,
+                IMMEDIATE_PASTE_DELAY.as_millis() as u64
             ));
 
             keybd_event(VK_CONTROL as u8, 0, 0, 0);

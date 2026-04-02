@@ -13,6 +13,8 @@ use windows_sys::Win32::UI::{
     },
 };
 
+use crate::platform::hotkey_display::format_hotkey_for_display as format_hotkey_for_display_impl;
+
 #[derive(Debug, Clone, Copy)]
 pub(super) struct RegisteredHotKey {
     pub modifiers: u32,
@@ -43,26 +45,7 @@ pub(super) fn parse_registered_hotkey(raw: &str) -> Result<RegisteredHotKey, Str
 }
 
 pub(super) fn format_hotkey_for_display(raw: &str) -> String {
-    match HotKey::from_str(raw) {
-        Ok(hotkey) => {
-            let mut parts = Vec::new();
-            if hotkey.mods.contains(Modifiers::CONTROL) {
-                parts.push("Ctrl".to_string());
-            }
-            if hotkey.mods.contains(Modifiers::SHIFT) {
-                parts.push("Shift".to_string());
-            }
-            if hotkey.mods.contains(Modifiers::ALT) {
-                parts.push("Alt".to_string());
-            }
-            if hotkey.mods.contains(Modifiers::SUPER) {
-                parts.push("Win".to_string());
-            }
-            parts.push(format_hotkey_key_for_display(hotkey.key));
-            parts.join(" + ")
-        }
-        Err(_) => raw.to_string(),
-    }
+    format_hotkey_for_display_impl(raw)
 }
 
 pub(super) fn hotkey_control_value(raw: &str) -> Result<u16, String> {
@@ -116,50 +99,6 @@ pub(super) fn hotkey_from_control_value(value: u32) -> Result<String, String> {
 
     Ok(HotKey::new(Some(modifiers), code).to_string())
 }
-
-fn format_hotkey_key_for_display(code: Code) -> String {
-    let raw = code.to_string();
-
-    if let Some(letter) = raw.strip_prefix("Key") {
-        return letter.to_string();
-    }
-    if let Some(digit) = raw.strip_prefix("Digit") {
-        return digit.to_string();
-    }
-    if let Some(numpad) = raw.strip_prefix("Numpad") {
-        return format!("数字键盘 {numpad}");
-    }
-
-    match code {
-        Code::Space => "空格".to_string(),
-        Code::Enter => "Enter".to_string(),
-        Code::Tab => "Tab".to_string(),
-        Code::Escape => "Esc".to_string(),
-        Code::Backspace => "Backspace".to_string(),
-        Code::Delete => "Delete".to_string(),
-        Code::ArrowUp => "↑".to_string(),
-        Code::ArrowDown => "↓".to_string(),
-        Code::ArrowLeft => "←".to_string(),
-        Code::ArrowRight => "→".to_string(),
-        Code::Home => "Home".to_string(),
-        Code::End => "End".to_string(),
-        Code::PageUp => "PageUp".to_string(),
-        Code::PageDown => "PageDown".to_string(),
-        Code::Comma => ",".to_string(),
-        Code::Period => ".".to_string(),
-        Code::Slash => "/".to_string(),
-        Code::Semicolon => ";".to_string(),
-        Code::Quote => "'".to_string(),
-        Code::BracketLeft => "[".to_string(),
-        Code::BracketRight => "]".to_string(),
-        Code::Backslash => "\\".to_string(),
-        Code::Backquote => "`".to_string(),
-        Code::Minus => "-".to_string(),
-        Code::Equal => "=".to_string(),
-        _ => raw,
-    }
-}
-
 fn code_to_vkey(code: Code) -> Option<u32> {
     let raw = code.to_string();
     if let Some(letter) = raw.strip_prefix("Key") {

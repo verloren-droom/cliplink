@@ -4,12 +4,7 @@ use uuid::Uuid;
 
 use crate::{
     constants::crypto::HISTORY_PURPOSE,
-    core::{
-        at_rest::LocalDataCipher,
-        error::{AppError, AppResult},
-        model::ClipboardItem,
-        paths::AppPaths,
-    },
+    core::{at_rest::LocalDataCipher, error::AppResult, model::ClipboardItem, paths::AppPaths},
 };
 
 pub struct HistoryStore {
@@ -17,33 +12,79 @@ pub struct HistoryStore {
     cipher: LocalDataCipher,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HistoryStoreProfile {
+    pub cache_size_kib: usize,
+    pub full_sync: bool,
+}
+
+impl Default for HistoryStoreProfile {
+    fn default() -> Self {
+        Self {
+            cache_size_kib: 256,
+            full_sync: false,
+        }
+    }
+}
+
+pub struct InsertResult {
+    pub inserted: bool,
+    pub pruned_ids: Vec<Uuid>,
+}
+
 impl HistoryStore {
-    pub fn open(paths: &AppPaths, cipher: LocalDataCipher) -> AppResult<Self> {
+    pub fn open(
+        paths: &AppPaths,
+        cipher: LocalDataCipher,
+        profile: HistoryStoreProfile,
+    ) -> AppResult<Self> {
         let mut conn = Connection::open(&paths.history_db)?;
-        configure_connection(&conn)?;
-        migrate_schema_if_needed(&mut conn, &cipher)?;
-        Ok(Self {
+        configure_connection(&conn, profile)?;
+        migrate_schema_if_needed(&mut conn)?;
+        let store = Self {
             conn: Mutex::new(conn),
             cipher,
-        })
+        };
+        store.reset_on_corrupted_payloads()?;
+        Ok(store)
     }
 
-    pub fn insert(&self, item: &ClipboardItem, limit: usize) -> AppResult<bool> {
+    pub fn insert(&self, item: &ClipboardItem, limit: usize) -> AppResult<InsertResult> {
         let conn = self.conn.lock();
-        let latest_signature: Option<String> = conn
+        let latest_item = conn
             .query_row(
-                "SELECT signature FROM history ORDER BY created_at DESC LIMIT 1",
+                "SELECT payload_blob, is_pinned
+                 FROM history
+                 ORDER BY created_at DESC
+                 LIMIT 1",
                 [],
-                |row| row.get(0),
+                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)? != 0)),
             )
-            .ok();
-        if latest_signature.as_deref() == Some(item.signature.as_str()) {
-            return Ok(false);
+            .optional()?;
+        if let Some((payload_blob, is_pinned)) = latest_item {
+            let mut latest_item = self.decrypt_item(&payload_blob)?;
+            latest_item.is_pinned = is_pinned;
+            if latest_item.id != item.id
+                && latest_item.signature == item.signature
+                && latest_item.source_device_id == item.source_device_id
+                && latest_item.source_device_name == item.source_device_name
+                && latest_item.is_remote == item.is_remote
+            {
+                return Ok(InsertResult {
+                    inserted: false,
+                    pruned_ids: Vec::new(),
+                });
+            }
         }
 
         conn.execute(
             "INSERT INTO history (id, signature, created_at, is_pinned, payload_blob)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(id) DO UPDATE SET
+                 signature = excluded.signature,
+                 created_at = excluded.created_at,
+                 is_pinned = MAX(history.is_pinned, excluded.is_pinned),
+                 payload_blob = excluded.payload_blob",
             params![
                 item.id.to_string(),
                 item.signature.clone(),
@@ -54,11 +95,14 @@ impl HistoryStore {
         )?;
 
         drop(conn);
-        self.enforce_limit(limit)?;
-        Ok(true)
+        let pruned_ids = self.enforce_limit(limit)?;
+        Ok(InsertResult {
+            inserted: true,
+            pruned_ids,
+        })
     }
 
-    pub fn enforce_limit(&self, limit: usize) -> AppResult<()> {
+    pub fn enforce_limit(&self, limit: usize) -> AppResult<Vec<Uuid>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT id, is_pinned
@@ -85,10 +129,14 @@ impl HistoryStore {
         }
         drop(stmt);
 
+        let mut removed_ids = Vec::with_capacity(delete_ids.len());
         for id in delete_ids {
             conn.execute("DELETE FROM history WHERE id = ?1", params![id])?;
+            if let Ok(parsed) = Uuid::parse_str(&id) {
+                removed_ids.push(parsed);
+            }
         }
-        Ok(())
+        Ok(removed_ids)
     }
 
     pub fn recent(&self, limit: usize) -> AppResult<Vec<ClipboardItem>> {
@@ -156,6 +204,7 @@ impl HistoryStore {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn clear_unpinned(&self) -> AppResult<usize> {
         let affected = self
             .conn
@@ -181,28 +230,47 @@ impl HistoryStore {
         let json = self.cipher.open(HISTORY_PURPOSE, payload_blob)?;
         serde_json::from_slice(&json).map_err(Into::into)
     }
+
+    fn reset_on_corrupted_payloads(&self) -> AppResult<()> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT payload_blob
+             FROM history
+             ORDER BY created_at DESC
+             LIMIT 1",
+        )?;
+        let payload_blob = stmt
+            .query_row([], |row| row.get::<_, Vec<u8>>(0))
+            .optional()?;
+        drop(stmt);
+
+        let Some(payload_blob) = payload_blob else {
+            return Ok(());
+        };
+
+        if self.decrypt_item(&payload_blob).is_ok() {
+            return Ok(());
+        }
+
+        // Legacy / corrupted rows are not supported; clear once to recover runtime.
+        conn.execute("DELETE FROM history", [])?;
+        Ok(())
+    }
 }
 
-fn configure_connection(conn: &Connection) -> AppResult<()> {
-    #[cfg(target_os = "android")]
-    conn.execute_batch(
-        "PRAGMA cache_size=-256;
+fn configure_connection(conn: &Connection, profile: HistoryStoreProfile) -> AppResult<()> {
+    let sync_mode = if profile.full_sync { "FULL" } else { "NORMAL" };
+    conn.execute_batch(&format!(
+        "PRAGMA cache_size=-{};
          PRAGMA mmap_size=0;
          PRAGMA journal_mode=WAL;
-         PRAGMA synchronous=FULL;",
-    )?;
-
-    #[cfg(not(target_os = "android"))]
-    conn.execute_batch(
-        "PRAGMA cache_size=-512;
-         PRAGMA mmap_size=0;
-         PRAGMA journal_mode=WAL;
-         PRAGMA synchronous=NORMAL;",
-    )?;
+         PRAGMA synchronous={sync_mode};",
+        profile.cache_size_kib.max(1)
+    ))?;
     Ok(())
 }
 
-fn migrate_schema_if_needed(conn: &mut Connection, cipher: &LocalDataCipher) -> AppResult<()> {
+fn migrate_schema_if_needed(conn: &mut Connection) -> AppResult<()> {
     let history_exists = conn
         .query_row(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'history' LIMIT 1",
@@ -217,24 +285,22 @@ fn migrate_schema_if_needed(conn: &mut Connection, cipher: &LocalDataCipher) -> 
         return Ok(());
     }
 
-    let (has_payload_blob, has_payload_json, has_is_pinned) = {
+    let (has_payload_blob, has_is_pinned) = {
         let mut stmt = conn.prepare("PRAGMA table_info(history)")?;
         let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
         let mut has_payload_blob = false;
-        let mut has_payload_json = false;
         let mut has_is_pinned = false;
         for column in columns {
             match column?.as_str() {
                 "payload_blob" => has_payload_blob = true,
-                "payload_json" => has_payload_json = true,
                 "is_pinned" => has_is_pinned = true,
                 _ => {}
             }
         }
-        (has_payload_blob, has_payload_json, has_is_pinned)
+        (has_payload_blob, has_is_pinned)
     };
 
-    if has_payload_blob && !has_payload_json {
+    if has_payload_blob {
         if !has_is_pinned {
             conn.execute(
                 "ALTER TABLE history ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0",
@@ -245,14 +311,13 @@ fn migrate_schema_if_needed(conn: &mut Connection, cipher: &LocalDataCipher) -> 
         return Ok(());
     }
 
-    if has_payload_json {
-        migrate_legacy_payload_json(conn, cipher)?;
-        return Ok(());
-    }
-
-    Err(AppError::Sql(rusqlite::Error::InvalidColumnName(
-        "history.payload_blob".to_string(),
-    )))
+    // Old plaintext/legacy schema is intentionally not supported.
+    // Drop and recreate a clean encrypted schema to keep startup stable.
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS history;
+         DROP INDEX IF EXISTS history_created_at_idx;",
+    )?;
+    create_history_schema(conn)
 }
 
 fn create_history_schema(conn: &Connection) -> AppResult<()> {
@@ -280,59 +345,14 @@ fn created_at_sort_key(item: &ClipboardItem) -> i64 {
     item.created_at.unix_timestamp_nanos() as i64
 }
 
-fn migrate_legacy_payload_json(conn: &mut Connection, cipher: &LocalDataCipher) -> AppResult<()> {
-    let transaction = conn.transaction()?;
-    transaction.execute_batch(
-        "DROP TABLE IF EXISTS history_v2;
-         CREATE TABLE history_v2 (
-           id TEXT PRIMARY KEY,
-           signature TEXT NOT NULL,
-           created_at INTEGER NOT NULL,
-           is_pinned INTEGER NOT NULL DEFAULT 0,
-           payload_blob BLOB NOT NULL
-         );",
-    )?;
-
-    {
-        let mut select = transaction.prepare(
-            "SELECT id, signature, created_at, payload_json
-             FROM history
-             ORDER BY created_at DESC",
-        )?;
-        let mut rows = select.query([])?;
-        while let Some(row) = rows.next()? {
-            let id: String = row.get(0)?;
-            let signature: String = row.get(1)?;
-            let created_at: i64 = row.get(2)?;
-            let payload_json: String = row.get(3)?;
-            let payload_blob = cipher.seal(HISTORY_PURPOSE, payload_json.as_bytes())?;
-            transaction.execute(
-                "INSERT INTO history_v2 (id, signature, created_at, is_pinned, payload_blob)
-                 VALUES (?1, ?2, ?3, 0, ?4)",
-                params![id, signature, created_at, payload_blob],
-            )?;
-        }
-    }
-
-    transaction.execute_batch(
-        "DROP INDEX IF EXISTS history_created_at_idx;
-         DROP TABLE history;
-         ALTER TABLE history_v2 RENAME TO history;",
-    )?;
-    create_history_index(&transaction)?;
-    transaction.commit()?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
 
-    use rusqlite::{Connection, params};
     use time::{Duration, OffsetDateTime};
     use uuid::Uuid;
 
-    use super::HistoryStore;
+    use super::{HistoryStore, HistoryStoreProfile};
     use crate::core::{
         at_rest::LocalDataCipher,
         model::{ClipboardItem, ClipboardKind, ClipboardPayload},
@@ -366,15 +386,32 @@ mod tests {
         }
     }
 
+    fn sample_remote_text_item(text: &str, device_id: &str, device_name: &str) -> ClipboardItem {
+        ClipboardItem {
+            id: Uuid::new_v4(),
+            kind: ClipboardKind::Text,
+            summary: text.to_string(),
+            signature: format!("sig-{text}"),
+            payload: ClipboardPayload::Text(text.to_string()),
+            source_device_id: Some(device_id.to_string()),
+            source_device_name: Some(device_name.to_string()),
+            created_at: OffsetDateTime::now_utc(),
+            is_remote: true,
+            is_pinned: false,
+        }
+    }
+
     #[test]
     fn encrypted_history_roundtrip_survives_reopen() {
         let paths = test_paths("roundtrip");
-        let store = HistoryStore::open(&paths, test_cipher()).unwrap();
+        let store =
+            HistoryStore::open(&paths, test_cipher(), HistoryStoreProfile::default()).unwrap();
         let item = sample_text_item("hello encrypted history");
         store.insert(&item, 10).unwrap();
         drop(store);
 
-        let reopened = HistoryStore::open(&paths, test_cipher()).unwrap();
+        let reopened =
+            HistoryStore::open(&paths, test_cipher(), HistoryStoreProfile::default()).unwrap();
         let recent = reopened.recent(10).unwrap();
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].payload, item.payload);
@@ -383,59 +420,44 @@ mod tests {
     }
 
     #[test]
-    fn legacy_plaintext_history_is_migrated() {
-        let paths = test_paths("legacy");
-        let connection = Connection::open(&paths.history_db).unwrap();
-        connection
-            .execute_batch(
-                "CREATE TABLE history (
-                   id TEXT PRIMARY KEY,
-                   signature TEXT NOT NULL,
-                   created_at INTEGER NOT NULL,
-                   is_pinned INTEGER NOT NULL DEFAULT 0,
-                   payload_json TEXT NOT NULL
-                 );
-                 CREATE INDEX history_created_at_idx ON history(created_at DESC);",
-            )
-            .unwrap();
+    fn same_text_from_different_sources_is_preserved() {
+        let paths = test_paths("different-sources");
+        let store =
+            HistoryStore::open(&paths, test_cipher(), HistoryStoreProfile::default()).unwrap();
+        let local = sample_text_item("shared text");
+        let mut remote = sample_remote_text_item("shared text", "remote-device", "Remote Device");
+        remote.created_at = local.created_at + Duration::seconds(1);
 
-        let item = sample_text_item("legacy plaintext item");
-        connection
-            .execute(
-                "INSERT INTO history (id, signature, created_at, is_pinned, payload_json)
-                 VALUES (?1, ?2, ?3, 0, ?4)",
-                params![
-                    item.id.to_string(),
-                    item.signature.clone(),
-                    item.created_at.unix_timestamp_nanos() as i64,
-                    serde_json::to_string(&item).unwrap()
-                ],
-            )
-            .unwrap();
-        drop(connection);
+        assert!(store.insert(&local, 10).unwrap().inserted);
+        assert!(store.insert(&remote, 10).unwrap().inserted);
 
-        let migrated = HistoryStore::open(&paths, test_cipher()).unwrap();
-        let recent = migrated.recent(10).unwrap();
+        let recent = store.recent(10).unwrap();
+        assert_eq!(recent.len(), 2);
+        assert!(recent[0].is_remote);
+        assert!(!recent[1].is_remote);
+
+        fs::remove_dir_all(paths.root).unwrap();
+    }
+
+    #[test]
+    fn reinserting_same_id_updates_existing_record() {
+        let paths = test_paths("same-id-update");
+        let store =
+            HistoryStore::open(&paths, test_cipher(), HistoryStoreProfile::default()).unwrap();
+        let mut item = sample_remote_text_item("hello", "remote-device", "Remote Device");
+
+        assert!(store.insert(&item, 10).unwrap().inserted);
+        item.created_at += Duration::seconds(5);
+        item.payload = ClipboardPayload::Text("updated".to_string());
+        item.summary = "updated".to_string();
+        item.signature = "sig-updated".to_string();
+        assert!(store.insert(&item, 10).unwrap().inserted);
+
+        let recent = store.recent(10).unwrap();
         assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].id, item.id);
         assert_eq!(recent[0].payload, item.payload);
-
-        let verify = Connection::open(&paths.history_db).unwrap();
-        let payload_blob_columns: i64 = verify
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('history') WHERE name = 'payload_blob'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let payload_json_columns: i64 = verify
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('history') WHERE name = 'payload_json'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(payload_blob_columns, 1);
-        assert_eq!(payload_json_columns, 0);
+        assert_eq!(recent[0].signature, item.signature);
 
         fs::remove_dir_all(paths.root).unwrap();
     }
@@ -443,19 +465,23 @@ mod tests {
     #[test]
     fn pinned_items_survive_limit_enforcement_and_clear() {
         let paths = test_paths("pinned");
-        let store = HistoryStore::open(&paths, test_cipher()).unwrap();
+        let store =
+            HistoryStore::open(&paths, test_cipher(), HistoryStoreProfile::default()).unwrap();
 
         let mut pinned = sample_text_item("pinned");
         pinned.is_pinned = true;
         pinned.created_at -= Duration::seconds(2);
-        store.insert(&pinned, 1).unwrap();
+        let pinned_insert = store.insert(&pinned, 1).unwrap();
+        assert!(pinned_insert.pruned_ids.is_empty());
 
         let mut regular_one = sample_text_item("regular-1");
         regular_one.created_at -= Duration::seconds(1);
-        store.insert(&regular_one, 1).unwrap();
+        let first_regular_insert = store.insert(&regular_one, 1).unwrap();
+        assert!(first_regular_insert.pruned_ids.is_empty());
 
         let regular_two = sample_text_item("regular-2");
-        store.insert(&regular_two, 1).unwrap();
+        let second_regular_insert = store.insert(&regular_two, 1).unwrap();
+        assert_eq!(second_regular_insert.pruned_ids, vec![regular_one.id]);
 
         let recent = store.recent(1).unwrap();
         assert_eq!(recent.len(), 2);

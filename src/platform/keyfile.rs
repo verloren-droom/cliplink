@@ -6,7 +6,7 @@ use std::os::unix::fs::PermissionsExt;
 use ring::rand::{SecureRandom, SystemRandom};
 
 use crate::{
-    constants::crypto::LOCAL_DATA_KEY_BYTES,
+    constants::crypto::{LOCAL_DATA_KEY_BYTES, LOCAL_DATA_KEY_FILE_NAME},
     core::{
         at_rest::{LocalDataCipher, sync_parent_dir},
         error::{AppError, AppResult},
@@ -21,8 +21,10 @@ pub(super) fn create_local_data_cipher(paths: &AppPaths) -> AppResult<LocalDataC
 }
 
 fn load_or_create_local_data_key(paths: &AppPaths) -> AppResult<[u8; LOCAL_DATA_KEY_BYTES]> {
-    if paths.local_data_key_file.exists() {
-        let key_bytes = fs::read(&paths.local_data_key_file)?;
+    let key_path = local_data_key_path(paths);
+
+    if key_path.exists() {
+        let key_bytes = fs::read(&key_path)?;
         return key_bytes.try_into().map_err(|_| {
             AppError::Crypto(format!(
                 "Local data key file must be exactly {LOCAL_DATA_KEY_BYTES} bytes."
@@ -35,7 +37,7 @@ fn load_or_create_local_data_key(paths: &AppPaths) -> AppResult<[u8; LOCAL_DATA_
         .fill(&mut key_bytes)
         .map_err(|_| AppError::Crypto("Failed to generate a local data key.".to_string()))?;
 
-    let temp_path = paths.local_data_key_file.with_extension("tmp");
+    let temp_path = key_path.with_extension("tmp");
     let mut file = OpenOptions::new()
         .create(true)
         .truncate(true)
@@ -45,11 +47,15 @@ fn load_or_create_local_data_key(paths: &AppPaths) -> AppResult<[u8; LOCAL_DATA_
     std::io::Write::write_all(&mut file, &key_bytes)?;
     file.sync_all()?;
     drop(file);
-    fs::rename(&temp_path, &paths.local_data_key_file)?;
-    restrict_owner_permissions(&paths.local_data_key_file)?;
-    sync_parent_dir(&paths.local_data_key_file)?;
+    fs::rename(&temp_path, &key_path)?;
+    restrict_owner_permissions(&key_path)?;
+    sync_parent_dir(&key_path)?;
 
     Ok(key_bytes)
+}
+
+fn local_data_key_path(paths: &AppPaths) -> std::path::PathBuf {
+    paths.root.join(LOCAL_DATA_KEY_FILE_NAME)
 }
 
 fn restrict_owner_permissions(path: &std::path::Path) -> AppResult<()> {

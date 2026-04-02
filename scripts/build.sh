@@ -178,6 +178,18 @@ read_cargo_package_field() {
   ' "$ROOT_DIR/Cargo.toml"
 }
 
+read_android_application_id() {
+  awk -F '= *' '
+    /^[[:space:]]*applicationId[[:space:]]*=/ {
+      value = $2
+      gsub(/^[[:space:]]*"/, "", value)
+      gsub(/"[[:space:]]*$/, "", value)
+      print value
+      exit
+    }
+  ' "$ANDROID_DIR/app/build.gradle.kts"
+}
+
 java_major_version() {
   local java_bin="$1"
   local raw
@@ -234,6 +246,12 @@ detect_java17_home() {
     "/usr/local/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"
     "/opt/homebrew/opt/openjdk@17"
     "/usr/local/opt/openjdk@17"
+    "/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+    "/Applications/Android Studio.app/Contents/jbr"
+    "/Applications/Rider.app/Contents/jbr/Contents/Home"
+    "/Applications/Rider.app/Contents/jbr"
+    "/Applications/CLion.app/Contents/jbr/Contents/Home"
+    "/Applications/CLion.app/Contents/jbr"
   )
 
   for candidate in /Library/Java/JavaVirtualMachines/*17*.jdk/Contents/Home; do
@@ -720,7 +738,13 @@ android_install() {
   export_android_env
   ensure_android_rust_toolchain
   require_command adb
+  local current_user application_id
   run_android_gradle ":app:installDebug"
+  current_user="$(adb shell am get-current-user 2>/dev/null | tr -d '\r' | tr -d '\n')"
+  application_id="$(read_android_application_id)"
+  if [[ -n "$current_user" && -n "$application_id" ]]; then
+    adb shell cmd package install-existing --user "$current_user" "$application_id" >/dev/null 2>&1 || true
+  fi
 }
 
 windows_release() {

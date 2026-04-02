@@ -93,17 +93,18 @@ pub fn is_sealed_payload(bytes: &[u8]) -> bool {
         && bytes.len() > LOCAL_DATA_MAGIC.len() + CHACHA20_POLY1305_NONCE_BYTES
 }
 
-pub fn load_or_legacy_bytes(
+pub fn load_sealed_bytes(
     path: &Path,
     purpose: &[u8],
     cipher: &LocalDataCipher,
-) -> AppResult<(Vec<u8>, bool)> {
+) -> AppResult<Vec<u8>> {
     let bytes = fs::read(path)?;
-    if is_sealed_payload(&bytes) {
-        Ok((cipher.open(purpose, &bytes)?, false))
-    } else {
-        Ok((bytes, true))
+    if !is_sealed_payload(&bytes) {
+        return Err(AppError::Crypto(
+            "Local data payload is not sealed.".to_string(),
+        ));
     }
+    cipher.open(purpose, &bytes)
 }
 
 pub fn save_sealed_bytes(

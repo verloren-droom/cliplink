@@ -7,6 +7,9 @@ pub(crate) const PANEL_HEIGHT: f64 = 412.0;
 /// Shared history panel header height.
 pub(crate) const HEADER_HEIGHT: f64 = 54.0;
 
+/// Shared status/progress strip height shown below the search field.
+pub(crate) const FEEDBACK_HEIGHT: f64 = 8.0;
+
 /// Shared history panel footer height.
 pub(crate) const FOOTER_HEIGHT: f64 = 100.0;
 
@@ -14,7 +17,7 @@ pub(crate) const FOOTER_HEIGHT: f64 = 100.0;
 pub(crate) const OUTER_PADDING: f64 = 12.0;
 
 /// Shared row height for clipboard history entries.
-pub(crate) const ROW_HEIGHT: f64 = 44.0;
+pub(crate) const ROW_HEIGHT: f64 = 56.0;
 
 /// Number of recent history entries mirrored into the tray menu.
 pub(crate) const TRAY_HISTORY_LIMIT: usize = 12;
@@ -26,4 +29,4 @@ pub(crate) const PREFERENCES_WIDTH: f64 = 548.0;
 pub(crate) const PREFERENCES_HEIGHT: f64 = 548.0;
 
 /// Shared row height for device rows in preferences.
-pub(crate) const PREFERENCES_DEVICE_ROW_HEIGHT: f64 = ROW_HEIGHT;
+pub(crate) const PREFERENCES_DEVICE_ROW_HEIGHT: f64 = 58.0;

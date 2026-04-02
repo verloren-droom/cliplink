@@ -7,6 +7,7 @@ use fs2::FileExt;
 use thiserror::Error;
 
 use crate::{
+    constants::storage::UI_LOCK_FILE_NAME,
     controller::AppController,
     core::{
         error::{AppError, AppResult},
@@ -55,6 +56,8 @@ pub fn run_native_ui_app() -> Result<(), Box<dyn std::error::Error>> {
         paths,
         clipboard,
         local_data_cipher,
+        platform::history_store_profile(),
+        platform::controller_runtime_policy(),
         device_name_hint.as_deref(),
     )
     .map_err(|source| StartupError::BootstrapController { source })?;
@@ -82,7 +85,7 @@ fn claim_native_ui_instance(paths: &AppPaths) -> AppResult<bool> {
         .read(true)
         .write(true)
         .truncate(false)
-        .open(paths.root.join("ui.lock"))?;
+        .open(paths.root.join(UI_LOCK_FILE_NAME))?;
 
     match file.try_lock_exclusive() {
         Ok(()) => {

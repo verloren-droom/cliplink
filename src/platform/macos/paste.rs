@@ -6,7 +6,7 @@ use objc2_core_graphics::{
 };
 use objc2_foundation::NSString;
 
-use crate::constants::timing::MACOS_IMMEDIATE_PASTE_DELAY;
+use crate::constants::timing::IMMEDIATE_PASTE_DELAY;
 
 /// ANSI virtual key code for the `V` key used to replay the standard paste shortcut.
 const PASTE_KEY_CODE_V: u16 = 9;
@@ -19,7 +19,7 @@ pub(super) fn trigger_immediate_paste(previous_frontmost_bundle_id: Option<Strin
                 focus_application(bundle_id);
             }
 
-            thread::sleep(MACOS_IMMEDIATE_PASTE_DELAY);
+            thread::sleep(IMMEDIATE_PASTE_DELAY);
             let _ = post_paste_shortcut();
         });
 }

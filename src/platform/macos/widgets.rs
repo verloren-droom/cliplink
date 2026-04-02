@@ -2,20 +2,28 @@ use super::{
     ui::{PREFERENCES_DEVICE_ROW_HEIGHT, ROW_HEIGHT},
     *,
 };
-use crate::controller::{HistoryRow, SettingsDeviceEntry};
+use crate::controller::{DeviceStatusKind, HistoryRow, SettingsDeviceEntry};
+use objc2_quartz_core::CALayer;
 
 const HISTORY_BADGE_HEIGHT: f64 = 20.0;
 const HISTORY_BADGE_REMOTE_MIN_WIDTH: f64 = 52.0;
 const HISTORY_BADGE_LOCAL_MIN_WIDTH: f64 = 48.0;
 const HISTORY_BADGE_MAX_WIDTH: f64 = 108.0;
-const HISTORY_PIN_BADGE_TEXT: &str = "锁定";
 const HISTORY_ROW_LEADING_X: f64 = 10.0;
-const HISTORY_ROW_SCROLLBAR_SAFE_INSET: f64 = 36.0;
-const HISTORY_ROW_TITLE_BADGE_GAP: f64 = 12.0;
-const HISTORY_ROW_BADGE_SPACING: f64 = 6.0;
-const HISTORY_ROW_TITLE_HEIGHT: f64 = 20.0;
-const PREFERENCES_DEVICE_ROW_TITLE_HEIGHT: f64 = 18.0;
+const HISTORY_ROW_SCROLLBAR_SAFE_INSET: f64 = 52.0;
+const HISTORY_ROW_TITLE_BADGE_GAP: f64 = 14.0;
+const HISTORY_ROW_TITLE_HEIGHT: f64 = 18.0;
+const HISTORY_ROW_METADATA_HEIGHT: f64 = 14.0;
+const HISTORY_ROW_LABEL_GAP: f64 = 4.0;
+const HISTORY_ROW_BOTTOM_INSET: f64 = 9.0;
+const PREFERENCES_DEVICE_ROW_TOP_INSET: f64 = 8.0;
+const PREFERENCES_DEVICE_ROW_BOTTOM_INSET: f64 = 8.0;
+const PREFERENCES_DEVICE_ROW_TITLE_HEIGHT: f64 = 20.0;
 const PREFERENCES_DEVICE_ROW_DETAIL_HEIGHT: f64 = 16.0;
+const PREFERENCES_DEVICE_ROW_LABEL_GAP: f64 = 4.0;
+const PREFERENCES_DEVICE_STATUS_DOT_WIDTH: f64 = 14.0;
+const PREFERENCES_DEVICE_TRAILING_GAP: f64 = 12.0;
+const PREFERENCES_DEVICE_TRAILING_SAFE_INSET: f64 = 28.0;
 const FOOTER_BUTTON_TITLE_INSET: f64 = 12.0;
 const FOOTER_BUTTON_SHORTCUT_WIDTH: f64 = 56.0;
 
@@ -149,19 +157,12 @@ pub(super) fn make_history_primary_label(
     text: &str,
     width: f64,
 ) -> Retained<NSTextField> {
-    let label = NSTextField::initWithFrame(
-        NSTextField::alloc(mtm),
-        NSRect::new(
-            NSPoint::new(0.0, 0.0),
-            NSSize::new(width.max(120.0), HISTORY_ROW_TITLE_HEIGHT),
-        ),
-    );
-    label.setStringValue(&NSString::from_str(text));
-    label.setEditable(false);
-    label.setSelectable(false);
-    label.setBordered(false);
-    label.setBezeled(false);
-    label.setDrawsBackground(false);
+    let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
+    label.setFrame(NSRect::new(
+        NSPoint::new(0.0, 0.0),
+        NSSize::new(width.max(120.0), HISTORY_ROW_TITLE_HEIGHT),
+    ));
+    label.setFont(Some(&NSFont::systemFontOfSize(NSFont::systemFontSize())));
     label.setTextColor(Some(&NSColor::labelColor()));
     label.setUsesSingleLineMode(true);
     label.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
@@ -176,6 +177,67 @@ pub(super) fn make_history_primary_label(
     label
 }
 
+fn make_history_metadata_label(
+    mtm: MainThreadMarker,
+    text: &str,
+    width: f64,
+) -> Retained<NSTextField> {
+    let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
+    label.setFrame(NSRect::new(
+        NSPoint::new(0.0, 0.0),
+        NSSize::new(width.max(120.0), HISTORY_ROW_METADATA_HEIGHT),
+    ));
+    label.setFont(Some(
+        &NSFont::labelFontOfSize(NSFont::smallSystemFontSize()),
+    ));
+    label.setTextColor(Some(&NSColor::secondaryLabelColor()));
+    label.setUsesSingleLineMode(true);
+    label.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
+    label.setAllowsDefaultTighteningForTruncation(true);
+    label.setMaximumNumberOfLines(1);
+    if let Some(cell) = label.cell() {
+        cell.setWraps(false);
+        cell.setScrollable(false);
+        cell.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
+        cell.setTruncatesLastVisibleLine(true);
+    }
+    label
+}
+
+fn history_kind_text(row: &HistoryRow) -> &'static str {
+    match row.kind.as_str() {
+        "files" => "文件",
+        _ => "文本",
+    }
+}
+
+fn history_metadata_text(row: &HistoryRow) -> String {
+    let mut parts = vec![history_kind_text(row).to_string()];
+    if row.is_pinned {
+        parts.push("已锁定".to_string());
+    }
+    parts.join(" · ")
+}
+
+fn history_primary_text(row: &HistoryRow) -> String {
+    let summary = row.summary_text.trim();
+    if row.kind != "files" {
+        return summary.to_string();
+    }
+
+    if let Some(rest) = summary.strip_prefix("文件 · ") {
+        return rest.trim().to_string();
+    }
+
+    if let Some((prefix, rest)) = summary.split_once(" · ") {
+        if let Some(count) = prefix.trim().strip_suffix("个文件") {
+            return format!("{} 项 · {}", count.trim(), rest.trim());
+        }
+    }
+
+    summary.to_string()
+}
+
 pub(super) fn make_history_badge(
     mtm: MainThreadMarker,
     text: &str,
@@ -188,12 +250,6 @@ pub(super) fn make_history_badge(
         NSColor::secondaryLabelColor()
     };
     make_history_badge_view(mtm, text, width, &tint)
-}
-
-pub(super) fn make_history_pin_badge(mtm: MainThreadMarker) -> Retained<NSView> {
-    let tint = NSColor::systemBlueColor();
-    let width = history_badge_width(HISTORY_PIN_BADGE_TEXT, false);
-    make_history_badge_view(mtm, HISTORY_PIN_BADGE_TEXT, width, &tint)
 }
 
 fn make_history_badge_view(
@@ -223,7 +279,7 @@ fn make_history_badge_view(
     label.setFont(Some(
         &NSFont::labelFontOfSize(NSFont::smallSystemFontSize()),
     ));
-    label.setTextColor(Some(&tint));
+    label.setTextColor(Some(tint));
     label.setUsesSingleLineMode(true);
     label.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
     label.setMaximumNumberOfLines(1);
@@ -235,7 +291,9 @@ fn make_history_badge_view(
     }
     label.sizeToFit();
     let label_height = label.frame().size.height.max(12.0);
-    let label_y = ((HISTORY_BADGE_HEIGHT - label_height) / 2.0).floor() - 0.5;
+    let label_y = ((HISTORY_BADGE_HEIGHT - label_height) / 2.0)
+        .round()
+        .max(0.0);
     label.setFrame(NSRect::new(
         NSPoint::new(0.0, label_y.max(0.0)),
         NSSize::new(width, label_height),
@@ -264,7 +322,6 @@ fn history_badge_width(text: &str, is_remote: bool) -> f64 {
 #[derive(Clone, Copy)]
 pub(super) struct HistoryRowAccessoryLayout {
     pub source_badge_origin: NSPoint,
-    pub pin_badge_origin: Option<NSPoint>,
 }
 
 pub(super) fn history_row_accessory_layout(
@@ -272,28 +329,13 @@ pub(super) fn history_row_accessory_layout(
     total_width: f64,
 ) -> HistoryRowAccessoryLayout {
     let content_width = total_width.max(240.0);
-    let pin_badge_width = if row.is_pinned {
-        history_badge_width(HISTORY_PIN_BADGE_TEXT, false)
-    } else {
-        0.0
-    };
     let badge_width = history_badge_width(&row.source_badge, row.is_remote);
     let trailing_edge = content_width - HISTORY_ROW_SCROLLBAR_SAFE_INSET;
-    let pin_badge_origin = row.is_pinned.then(|| {
-        NSPoint::new(
-            (trailing_edge - pin_badge_width).max(HISTORY_ROW_LEADING_X + 160.0),
-            ((ROW_HEIGHT - HISTORY_BADGE_HEIGHT) / 2.0).floor().max(6.0),
-        )
-    });
-    let source_trailing_edge = pin_badge_origin
-        .map(|origin| origin.x - HISTORY_ROW_BADGE_SPACING)
-        .unwrap_or(trailing_edge);
-    let source_badge_x = (source_trailing_edge - badge_width).max(HISTORY_ROW_LEADING_X + 120.0);
+    let source_badge_x = (trailing_edge - badge_width).max(HISTORY_ROW_LEADING_X + 120.0);
     let badge_y = ((ROW_HEIGHT - HISTORY_BADGE_HEIGHT) / 2.0).floor().max(6.0);
 
     HistoryRowAccessoryLayout {
         source_badge_origin: NSPoint::new(source_badge_x, badge_y),
-        pin_badge_origin,
     }
 }
 
@@ -329,12 +371,6 @@ pub(super) fn make_history_row_view(
         }
         badge
     };
-    let pin_badge = accessory_layout.pin_badge_origin.map(|origin| {
-        let badge = make_history_pin_badge(mtm);
-        badge.setFrameOrigin(origin);
-        badge.setToolTip(Some(&NSString::from_str("锁定项不会参与清除或数量裁剪")));
-        badge
-    });
 
     let title_left_edge = HISTORY_ROW_LEADING_X + row_spacing * 0.25;
     let title_right_edge = source_badge.frame().origin.x - HISTORY_ROW_TITLE_BADGE_GAP;
@@ -347,24 +383,31 @@ pub(super) fn make_history_row_view(
         ),
     );
 
-    let title = make_history_primary_label(mtm, &row.summary_text, text_width);
+    let title = make_history_primary_label(mtm, &history_primary_text(row), text_width);
+    let title_y = HISTORY_ROW_BOTTOM_INSET + HISTORY_ROW_METADATA_HEIGHT + HISTORY_ROW_LABEL_GAP;
     title.setFrame(NSRect::new(
-        NSPoint::new(0.0, ((ROW_HEIGHT - HISTORY_ROW_TITLE_HEIGHT) / 2.0).floor()),
+        NSPoint::new(0.0, title_y),
         NSSize::new(text_width, HISTORY_ROW_TITLE_HEIGHT),
     ));
     title.setAlignment(objc2_app_kit::NSTextAlignment::Left);
+
+    let metadata = make_history_metadata_label(mtm, &history_metadata_text(row), text_width);
+    metadata.setFrame(NSRect::new(
+        NSPoint::new(0.0, HISTORY_ROW_BOTTOM_INSET),
+        NSSize::new(text_width, HISTORY_ROW_METADATA_HEIGHT),
+    ));
+
     if !row.detail_tooltip.trim().is_empty() {
         let tooltip = NSString::from_str(&row.detail_tooltip);
         title.setToolTip(Some(&tooltip));
+        metadata.setToolTip(Some(&tooltip));
         title_container.setToolTip(Some(&tooltip));
     }
     title_container.addSubview(&title);
+    title_container.addSubview(&metadata);
 
     row_view.addSubview(&title_container);
     row_view.addSubview(&source_badge);
-    if let Some(pin_badge) = pin_badge {
-        row_view.addSubview(&pin_badge);
-    }
     unsafe {
         row_view.setTextField(Some(&title));
     }
@@ -386,20 +429,46 @@ pub(super) fn make_preferences_device_row_view(
     );
 
     let inset = 12.0;
-    let text_width = (content_width - inset * 2.0).max(120.0);
+    let trailing_width = PREFERENCES_DEVICE_TRAILING_SAFE_INSET
+        + PREFERENCES_DEVICE_STATUS_DOT_WIDTH
+        + PREFERENCES_DEVICE_TRAILING_GAP;
+    let text_width = (content_width - inset * 2.0 - trailing_width).max(120.0);
+    let detail_y = PREFERENCES_DEVICE_ROW_BOTTOM_INSET;
+    let title_y = (PREFERENCES_DEVICE_ROW_HEIGHT
+        - PREFERENCES_DEVICE_ROW_TOP_INSET
+        - PREFERENCES_DEVICE_ROW_TITLE_HEIGHT)
+        .max(detail_y + PREFERENCES_DEVICE_ROW_DETAIL_HEIGHT + PREFERENCES_DEVICE_ROW_LABEL_GAP);
 
     let title = make_history_primary_label(mtm, &row.device_name, text_width);
     title.setFrame(NSRect::new(
-        NSPoint::new(inset, 20.0),
+        NSPoint::new(inset, title_y),
         NSSize::new(text_width, PREFERENCES_DEVICE_ROW_TITLE_HEIGHT),
+    ));
+    title.setFont(Some(
+        &NSFont::boldSystemFontOfSize(NSFont::systemFontSize()),
     ));
     if !row.device_name.trim().is_empty() {
         title.setToolTip(Some(&NSString::from_str(&row.device_name)));
     }
 
+    let status_size = PREFERENCES_DEVICE_STATUS_DOT_WIDTH;
+    let trailing_anchor = content_width - inset - PREFERENCES_DEVICE_TRAILING_SAFE_INSET;
+    let status_origin_x = trailing_anchor - status_size;
+
+    let status_frame = NSRect::new(
+        NSPoint::new(
+            status_origin_x,
+            ((PREFERENCES_DEVICE_ROW_HEIGHT - status_size) / 2.0)
+                .floor()
+                .max(0.0),
+        ),
+        NSSize::new(status_size, status_size),
+    );
+    let status_dot = make_preferences_status_indicator(mtm, row, status_frame);
+
     let detail = NSTextField::labelWithString(&NSString::from_str(&row.secondary_text), mtm);
     detail.setFrame(NSRect::new(
-        NSPoint::new(inset, 6.0),
+        NSPoint::new(inset, detail_y),
         NSSize::new(text_width, PREFERENCES_DEVICE_ROW_DETAIL_HEIGHT),
     ));
     detail.setFont(Some(
@@ -421,10 +490,44 @@ pub(super) fn make_preferences_device_row_view(
 
     row_view.addSubview(&title);
     row_view.addSubview(&detail);
+    row_view.addSubview(&status_dot);
     unsafe {
         row_view.setTextField(Some(&title));
     }
     row_view
+}
+
+fn make_preferences_status_indicator(
+    mtm: MainThreadMarker,
+    row: &SettingsDeviceEntry,
+    frame: NSRect,
+) -> Retained<NSView> {
+    let (tint, status_label) = preferences_device_status_style(row);
+    let indicator = NSView::initWithFrame(NSView::alloc(mtm), frame);
+    indicator.setWantsLayer(true);
+    let layer = CALayer::layer();
+    let tint_ref: &NSColor = &tint;
+    let cg_color = tint_ref.CGColor();
+    layer.setBackgroundColor(Some(&cg_color));
+    layer.setCornerRadius(frame.size.width / 2.0);
+    layer.setMasksToBounds(true);
+    indicator.setLayer(Some(&layer));
+    let tooltip = if row.status_tooltip.trim().is_empty() {
+        status_label.to_string()
+    } else {
+        format!("{status_label}\n{}", row.status_tooltip)
+    };
+    indicator.setToolTip(Some(&NSString::from_str(&tooltip)));
+    indicator
+}
+
+fn preferences_device_status_style(row: &SettingsDeviceEntry) -> (Retained<NSColor>, &'static str) {
+    match row.status_kind {
+        DeviceStatusKind::ConnectedTrusted => (NSColor::systemGreenColor(), "已信任已连接"),
+        DeviceStatusKind::TrustedStandby => (NSColor::systemYellowColor(), "已信任未连接"),
+        DeviceStatusKind::Offline => (NSColor::systemRedColor(), "离线"),
+        DeviceStatusKind::Untrusted => (NSColor::systemGrayColor(), "未信任"),
+    }
 }
 
 pub(super) fn make_input_field(

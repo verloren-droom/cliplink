@@ -1,23 +1,39 @@
-use super::{
-    ui::{FOOTER_HEIGHT, HEADER_HEIGHT, OUTER_PADDING, PANEL_HEIGHT, PANEL_WIDTH, ROW_HEIGHT},
-    *,
-};
-use objc2::sel;
-use objc2_foundation::ns_string;
-
-use crate::constants::app::APP_NAME;
-use crate::platform::macos::widgets::{FooterShortcut, make_footer_button, make_separator};
-
-const FOOTER_BUTTON_HEIGHT: f64 = 22.0;
-const FOOTER_BUTTON_X_OFFSET: f64 = 6.0;
-const FOOTER_BUTTON_CLEAR_Y: f64 = 70.0;
-const FOOTER_BUTTON_PREFERENCES_Y: f64 = 48.0;
-const FOOTER_BUTTON_ABOUT_Y: f64 = 26.0;
-const FOOTER_BUTTON_QUIT_Y: f64 = 4.0;
-const FOOTER_BUTTON_HORIZONTAL_PADDING: f64 = 4.0;
+use super::*;
 
 impl AppDelegate {
-    pub(super) fn install_panel(&self, mtm: MainThreadMarker) {
+    pub(in crate::platform::macos) fn confirm_clear_history(&self) -> Option<bool> {
+        let alert = NSAlert::new(self.mtm());
+        alert.setMessageText(&NSString::from_str("确认清除历史记录"));
+        alert.setInformativeText(&NSString::from_str(
+            "默认仅清除本机未锁定的剪切板历史记录。\n\n远程历史始终保留。",
+        ));
+        let accessory = NSView::initWithFrame(
+            NSView::alloc(self.mtm()),
+            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(260.0, 22.0)),
+        );
+        let include_pinned_checkbox = make_checkbox(
+            self.mtm(),
+            "同时清除锁定条目",
+            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(260.0, 22.0)),
+        );
+        include_pinned_checkbox.setState(objc2_app_kit::NSControlStateValueOff);
+        include_pinned_checkbox.sizeToFit();
+        let mut checkbox_frame = include_pinned_checkbox.frame();
+        checkbox_frame.origin.x = ((260.0 - checkbox_frame.size.width) / 2.0).max(0.0);
+        checkbox_frame.origin.y = ((22.0 - checkbox_frame.size.height) / 2.0).max(0.0);
+        include_pinned_checkbox.setFrame(checkbox_frame);
+        accessory.addSubview(&include_pinned_checkbox);
+        alert.setAccessoryView(Some(&accessory));
+        alert.addButtonWithTitle(&NSString::from_str("清除"));
+        alert.addButtonWithTitle(&NSString::from_str("取消"));
+        if alert.runModal() != NSAlertFirstButtonReturn {
+            return None;
+        }
+
+        Some(include_pinned_checkbox.state() == objc2_app_kit::NSControlStateValueOn)
+    }
+
+    pub(in crate::platform::macos) fn install_panel(&self, mtm: MainThreadMarker) {
         let style = NSWindowStyleMask::Titled
             | NSWindowStyleMask::FullSizeContentView
             | NSWindowStyleMask::NonactivatingPanel;
@@ -71,15 +87,31 @@ impl AppDelegate {
             return;
         };
 
-        let search_frame = NSRect::new(
+        let scope_width = 132.0;
+        let scope_frame = NSRect::new(
             NSPoint::new(OUTER_PADDING, PANEL_HEIGHT - HEADER_HEIGHT + 4.0),
-            NSSize::new(PANEL_WIDTH - OUTER_PADDING * 2.0, 30.0),
+            NSSize::new(scope_width, 30.0),
+        );
+        let history_scope_button =
+            NSPopUpButton::initWithFrame_pullsDown(NSPopUpButton::alloc(mtm), scope_frame, false);
+        unsafe {
+            history_scope_button.setTarget(Some(self));
+            history_scope_button.setAction(Some(sel!(historyScopeChanged:)));
+        }
+
+        let search_frame = NSRect::new(
+            NSPoint::new(
+                OUTER_PADDING + scope_width + 8.0,
+                PANEL_HEIGHT - HEADER_HEIGHT + 4.0,
+            ),
+            NSSize::new(PANEL_WIDTH - OUTER_PADDING * 2.0 - scope_width - 8.0, 30.0),
         );
         let search_field = NSSearchField::initWithFrame(NSSearchField::alloc(mtm), search_frame);
         search_field.setPlaceholderString(Some(ns_string!("搜索")));
         unsafe { search_field.setDelegate(Some(ProtocolObject::from_ref(self))) };
 
-        let table_height = PANEL_HEIGHT - HEADER_HEIGHT - FOOTER_HEIGHT - OUTER_PADDING;
+        let table_height =
+            PANEL_HEIGHT - HEADER_HEIGHT - FOOTER_HEIGHT - OUTER_PADDING - FEEDBACK_HEIGHT;
         let scroll_frame = NSRect::new(
             NSPoint::new(OUTER_PADDING, FOOTER_HEIGHT),
             NSSize::new(PANEL_WIDTH - OUTER_PADDING * 2.0, table_height),
@@ -108,6 +140,7 @@ impl AppDelegate {
         table_view.setRowHeight(ROW_HEIGHT);
         table_view.setIntercellSpacing(NSSize::new(0.0, 0.0));
         table_view.setUsesAutomaticRowHeights(false);
+        table_view.setAllowsMultipleSelection(true);
         unsafe {
             table_view.setDataSource(Some(ProtocolObject::from_ref(self)));
             table_view.setDelegate(Some(ProtocolObject::from_ref(self)));
@@ -117,16 +150,27 @@ impl AppDelegate {
         }
 
         let history_context_menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), ns_string!("历史"));
+        history_context_menu.setDelegate(Some(ProtocolObject::from_ref(self)));
         let pin_item = crate::platform::macos::widgets::make_menu_item(
             mtm,
-            "锁定/取消锁定",
+            "锁定",
             Some(self),
             Some(sel!(toggleHistoryItemPin:)),
             "",
         );
         pin_item.setTag(-1);
         history_context_menu.addItem(&pin_item);
-        history_context_menu.addItem(&NSMenuItem::separatorItem(mtm));
+        let open_folder_item = crate::platform::macos::widgets::make_menu_item(
+            mtm,
+            "打开所在文件夹",
+            Some(self),
+            Some(sel!(openHistoryItemParentFolders:)),
+            "",
+        );
+        open_folder_item.setTag(-1);
+        history_context_menu.addItem(&open_folder_item);
+        let separator_item = NSMenuItem::separatorItem(mtm);
+        history_context_menu.addItem(&separator_item);
         let delete_item = crate::platform::macos::widgets::make_menu_item(
             mtm,
             "删除",
@@ -147,6 +191,27 @@ impl AppDelegate {
         column.setWidth(scroll_frame.size.width);
         table_view.addTableColumn(&column);
         scroll_view.setDocumentView(Some(&table_view));
+
+        let feedback_track = make_background_box(
+            mtm,
+            NSRect::new(
+                NSPoint::new(OUTER_PADDING, FOOTER_HEIGHT + table_height + 1.0),
+                NSSize::new(PANEL_WIDTH - OUTER_PADDING * 2.0, FEEDBACK_BAR_HEIGHT),
+            ),
+        );
+        feedback_track.setHidden(true);
+        feedback_track.setBackgroundColor(Some(
+            &NSColor::secondaryLabelColor().colorWithAlphaComponent(0.12),
+        ));
+        let feedback_fill = make_background_box(
+            mtm,
+            NSRect::new(
+                NSPoint::new(OUTER_PADDING, FOOTER_HEIGHT + table_height + 1.0),
+                NSSize::new(0.0, FEEDBACK_BAR_HEIGHT),
+            ),
+        );
+        feedback_fill.setHidden(true);
+        feedback_fill.setBackgroundColor(Some(&NSColor::systemBlueColor()));
 
         let separator = make_separator(
             mtm,
@@ -171,7 +236,11 @@ impl AppDelegate {
                     FOOTER_BUTTON_HEIGHT,
                 ),
             ),
-            None,
+            Some(FooterShortcut {
+                display: "⌘⌫",
+                key_equivalent: "\u{8}",
+                modifier_mask: NSEventModifierFlags::Command,
+            }),
         );
 
         let preferences_button = make_footer_button(
@@ -233,7 +302,10 @@ impl AppDelegate {
             }),
         );
 
+        content.addSubview(&history_scope_button);
         content.addSubview(&search_field);
+        content.addSubview(&feedback_track);
+        content.addSubview(&feedback_fill);
         content.addSubview(&scroll_view);
         content.addSubview(&separator);
         content.addSubview(&clear_button);
@@ -245,20 +317,41 @@ impl AppDelegate {
 
         self.ivars().panel.replace(Some(panel));
         self.ivars().search_field.replace(Some(search_field));
+        self.ivars()
+            .history_scope_button
+            .replace(Some(history_scope_button));
         self.ivars().table_view.replace(Some(table_view));
+        self.ivars()
+            .panel_progress_track
+            .replace(Some(feedback_track));
+        self.ivars()
+            .panel_progress_fill
+            .replace(Some(feedback_fill));
+        self.ivars()
+            .history_context_separator_item
+            .replace(Some(separator_item));
+        self.ivars()
+            .history_context_pin_item
+            .replace(Some(pin_item));
+        self.ivars()
+            .history_context_open_folder_item
+            .replace(Some(open_folder_item));
+        self.ivars()
+            .history_context_delete_item
+            .replace(Some(delete_item));
         self.ivars()
             .history_context_menu
             .replace(Some(history_context_menu));
     }
 
-    pub(super) fn ensure_panel(&self) {
+    pub(in crate::platform::macos) fn ensure_panel(&self) {
         if self.panel().is_none() {
             self.install_panel(self.mtm());
             self.reload_filtered_rows_revealing_selection();
         }
     }
 
-    pub(super) fn toggle_panel(&self) {
+    pub(in crate::platform::macos) fn toggle_panel(&self) {
         self.ensure_panel();
 
         let Some(panel) = self.panel() else {
@@ -272,7 +365,7 @@ impl AppDelegate {
         }
     }
 
-    pub(super) fn show_panel(&self) {
+    pub(in crate::platform::macos) fn show_panel(&self) {
         self.ensure_panel();
         self.capture_frontmost_application();
 
@@ -283,6 +376,7 @@ impl AppDelegate {
 
         self.position_panel();
         self.reload_filtered_rows_revealing_selection();
+        self.refresh_panel_feedback_state();
 
         let Some(panel) = self.panel() else {
             return;
@@ -294,7 +388,7 @@ impl AppDelegate {
         }
     }
 
-    pub(super) fn hide_panel(&self, clear_search: bool) {
+    pub(in crate::platform::macos) fn hide_panel(&self, clear_search: bool) {
         let Some(panel) = self.panel() else {
             return;
         };
@@ -351,259 +445,6 @@ impl AppDelegate {
         ));
     }
 
-    pub(super) fn reload_filtered_rows(&self) {
-        self.reload_filtered_rows_with_options(false);
-    }
-
-    pub(super) fn reload_filtered_rows_revealing_selection(&self) {
-        self.reload_filtered_rows_with_options(true);
-    }
-
-    fn reload_filtered_rows_with_options(&self, reveal_selection: bool) {
-        let selected_id = self.current_selected_history_id();
-        let previous_scroll_origin = self.current_scroll_origin();
-        let query = self.ivars().search_query.borrow().clone();
-        let rows = self.ivars().controller.borrow().history_rows(&query);
-        let matched_selection = selected_id.and_then(|id| rows.iter().position(|row| row.id == id));
-        *self.ivars().filtered_rows.borrow_mut() = rows;
-        if let Some(row) = matched_selection {
-            self.ivars().selected_row.replace(Some(row));
-        }
-
-        let Some(table_view) = self.table_view() else {
-            return;
-        };
-
-        table_view.reloadData();
-        let selected_row = self.ivars().selected_row.borrow().as_ref().copied();
-        let row_count = self.ivars().filtered_rows.borrow().len();
-        let should_reveal_selection = reveal_selection
-            || selected_row.is_none()
-            || selected_row.is_some_and(|row| row >= row_count);
-        self.ensure_selection(should_reveal_selection);
-        if !should_reveal_selection {
-            self.restore_scroll_origin(previous_scroll_origin);
-        }
-    }
-
-    fn ensure_selection(&self, scroll: bool) {
-        let Some(table_view) = self.table_view() else {
-            return;
-        };
-        let rows = self.ivars().filtered_rows.borrow().len();
-        if rows == 0 {
-            self.ivars().selected_row.replace(None);
-            unsafe {
-                table_view.deselectAll(None);
-            }
-            return;
-        }
-
-        let target = self
-            .ivars()
-            .selected_row
-            .borrow()
-            .as_ref()
-            .copied()
-            .filter(|row| *row < rows)
-            .unwrap_or(0);
-        self.set_selected_row(target, scroll);
-    }
-
-    pub(super) fn move_selection(&self, delta: NSInteger) {
-        let row_count = self.ivars().filtered_rows.borrow().len() as NSInteger;
-        if row_count == 0 {
-            return;
-        }
-
-        let current = self
-            .ivars()
-            .selected_row
-            .borrow()
-            .as_ref()
-            .copied()
-            .map(|row| row as NSInteger)
-            .unwrap_or(0);
-        let next = if current < 0 {
-            0
-        } else {
-            (current + delta).clamp(0, row_count - 1)
-        };
-        self.set_selected_row(next as usize, true);
-    }
-
-    pub(super) fn activate_selected(&self) {
-        let Some(row) = self.ivars().selected_row.borrow().as_ref().copied() else {
-            return;
-        };
-
-        self.activate_row(row);
-    }
-
-    pub(super) fn activate_clicked_or_selected(&self, sender: Option<&AnyObject>) {
-        let clicked_row = sender
-            .map(|sender| unsafe { msg_send![sender, clickedRow] })
-            .filter(|row: &NSInteger| *row >= 0)
-            .map(|row| row as usize);
-
-        let row = clicked_row.or_else(|| self.ivars().selected_row.borrow().as_ref().copied());
-        let Some(row) = row else {
-            return;
-        };
-
-        self.set_selected_row(row, sender.is_none());
-        if sender.is_some() && !self.current_table_click_is_double_click() {
-            return;
-        }
-        self.activate_row(row);
-    }
-
-    fn current_table_click_is_double_click(&self) -> bool {
-        let app = NSApplication::sharedApplication(self.mtm());
-        app.currentEvent().is_some_and(|event| {
-            matches!(
-                event.r#type(),
-                NSEventType::LeftMouseDown | NSEventType::LeftMouseUp
-            ) && event.clickCount() >= 2
-        })
-    }
-
-    fn activate_row(&self, row: usize) {
-        let Some(id) = self
-            .ivars()
-            .filtered_rows
-            .borrow()
-            .get(row)
-            .map(|row| row.id)
-        else {
-            return;
-        };
-
-        self.hide_panel(true);
-        if self.ivars().controller.borrow_mut().copy_item(id).ok() == Some(true) {
-            self.trigger_immediate_paste();
-        }
-    }
-
-    pub(super) fn delete_history_row(&self, row: usize) {
-        let Some(id) = self
-            .ivars()
-            .filtered_rows
-            .borrow()
-            .get(row)
-            .map(|entry| entry.id)
-        else {
-            return;
-        };
-
-        if self
-            .ivars()
-            .controller
-            .borrow_mut()
-            .delete_history_item(id)
-            .ok()
-            != Some(true)
-        {
-            return;
-        }
-
-        self.reload_filtered_rows();
-
-        let remaining = self.ivars().filtered_rows.borrow().len();
-        if remaining == 0 {
-            self.ivars().selected_row.replace(None);
-            if let Some(table_view) = self.table_view() {
-                unsafe {
-                    table_view.deselectAll(None);
-                }
-            }
-            return;
-        }
-
-        let target = row.saturating_sub(1).min(remaining - 1);
-        self.set_selected_row(target, true);
-    }
-
-    pub(super) fn toggle_history_row_pin(&self, row: usize) {
-        let Some(id) = self
-            .ivars()
-            .filtered_rows
-            .borrow()
-            .get(row)
-            .map(|entry| entry.id)
-        else {
-            return;
-        };
-
-        if self
-            .ivars()
-            .controller
-            .borrow_mut()
-            .toggle_history_item_pin(id)
-            .ok()
-            .flatten()
-            .is_none()
-        {
-            return;
-        }
-
-        self.reload_filtered_rows_revealing_selection();
-    }
-
-    pub(super) fn sync_selected_row_from_table(&self) {
-        let Some(table_view) = self.table_view() else {
-            return;
-        };
-        let row = table_view.selectedRow();
-        self.ivars()
-            .selected_row
-            .replace((row >= 0).then_some(row as usize));
-    }
-
-    pub(super) fn context_history_row(&self) -> Option<usize> {
-        let table_view = self.table_view()?;
-        let row = table_view.clickedRow();
-        (row >= 0).then_some(row as usize)
-    }
-
-    fn set_selected_row(&self, row: usize, scroll: bool) {
-        let Some(table_view) = self.table_view() else {
-            return;
-        };
-
-        self.ivars().selected_row.replace(Some(row));
-        let indexes = NSIndexSet::indexSetWithIndex(row as NSUInteger);
-        table_view.selectRowIndexes_byExtendingSelection(&indexes, false);
-        if scroll {
-            table_view.scrollRowToVisible(row as NSInteger);
-        }
-    }
-
-    fn current_selected_history_id(&self) -> Option<Uuid> {
-        let selected_row = self.ivars().selected_row.borrow().as_ref().copied()?;
-        self.ivars()
-            .filtered_rows
-            .borrow()
-            .get(selected_row)
-            .map(|row| row.id)
-    }
-
-    fn current_scroll_origin(&self) -> Option<NSPoint> {
-        let table_view = self.table_view()?;
-        let scroll_view = table_view.enclosingScrollView()?;
-        Some(scroll_view.documentVisibleRect().origin)
-    }
-
-    fn restore_scroll_origin(&self, origin: Option<NSPoint>) {
-        let Some(origin) = origin else {
-            return;
-        };
-        let Some(table_view) = self.table_view() else {
-            return;
-        };
-        table_view.scrollPoint(NSPoint::new(0.0, origin.y.max(0.0)));
-    }
-
     fn release_panel(&self) {
         if let Some(table_view) = self.ivars().table_view.borrow_mut().take() {
             unsafe {
@@ -618,7 +459,16 @@ impl AppDelegate {
                 search_field.setDelegate(None);
             }
         }
-        self.ivars().history_context_menu.borrow_mut().take();
+        if let Some(menu) = self.ivars().history_context_menu.borrow_mut().take() {
+            menu.setDelegate(None);
+        }
+        self.ivars().history_context_separator_item.replace(None);
+        self.ivars().history_context_pin_item.replace(None);
+        self.ivars().history_context_open_folder_item.replace(None);
+        self.ivars().history_context_delete_item.replace(None);
+        self.ivars().panel_status_label.replace(None);
+        self.ivars().panel_progress_track.replace(None);
+        self.ivars().panel_progress_fill.replace(None);
 
         if let Some(panel) = self.ivars().panel.borrow_mut().take() {
             panel.setDelegate(None);
@@ -627,14 +477,11 @@ impl AppDelegate {
             panel.close();
         }
 
-        self.ivars().filtered_rows.borrow_mut().clear();
+        let mut filtered_rows = self.ivars().filtered_rows.borrow_mut();
+        filtered_rows.clear();
+        filtered_rows.shrink_to_fit();
+        drop(filtered_rows);
         self.ivars().selected_row.replace(None);
+        self.ivars().selected_history_ids.replace(Vec::new());
     }
-}
-
-fn point_in_rect(point: NSPoint, rect: NSRect) -> bool {
-    point.x >= rect.origin.x
-        && point.x <= rect.origin.x + rect.size.width
-        && point.y >= rect.origin.y
-        && point.y <= rect.origin.y + rect.size.height
 }
