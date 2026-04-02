@@ -2,10 +2,10 @@ use std::fs;
 
 use ring::rand::{SecureRandom, SystemRandom};
 use windows_sys::Win32::{
+    Foundation::LocalFree,
     Security::Cryptography::{
-        CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData, DATA_BLOB,
+        CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
     },
-    System::Memory::LocalFree,
 };
 
 use crate::{
@@ -57,12 +57,12 @@ fn local_data_key_path(paths: &AppPaths) -> std::path::PathBuf {
 }
 
 fn protect_bytes(plaintext: &[u8]) -> AppResult<Vec<u8>> {
-    let mut input = DATA_BLOB {
+    let mut input = CRYPT_INTEGER_BLOB {
         cbData: plaintext.len() as u32,
         pbData: plaintext.as_ptr() as *mut u8,
     };
     let description = wide(APP_NAME);
-    let mut output = DATA_BLOB {
+    let mut output = CRYPT_INTEGER_BLOB {
         cbData: 0,
         pbData: std::ptr::null_mut(),
     };
@@ -84,17 +84,17 @@ fn protect_bytes(plaintext: &[u8]) -> AppResult<Vec<u8>> {
         }
 
         let sealed = copy_blob_bytes(&output);
-        let _ = LocalFree(output.pbData as isize);
+        let _ = LocalFree(output.pbData.cast());
         sealed
     }
 }
 
 fn unprotect_bytes(sealed: &[u8]) -> AppResult<Vec<u8>> {
-    let mut input = DATA_BLOB {
+    let mut input = CRYPT_INTEGER_BLOB {
         cbData: sealed.len() as u32,
         pbData: sealed.as_ptr() as *mut u8,
     };
-    let mut output = DATA_BLOB {
+    let mut output = CRYPT_INTEGER_BLOB {
         cbData: 0,
         pbData: std::ptr::null_mut(),
     };
@@ -116,12 +116,12 @@ fn unprotect_bytes(sealed: &[u8]) -> AppResult<Vec<u8>> {
         }
 
         let plaintext = copy_blob_bytes(&output);
-        let _ = LocalFree(output.pbData as isize);
+        let _ = LocalFree(output.pbData.cast());
         plaintext
     }
 }
 
-unsafe fn copy_blob_bytes(blob: &DATA_BLOB) -> AppResult<Vec<u8>> {
+unsafe fn copy_blob_bytes(blob: &CRYPT_INTEGER_BLOB) -> AppResult<Vec<u8>> {
     if blob.pbData.is_null() || blob.cbData == 0 {
         return Err(AppError::Crypto(
             "Windows DPAPI returned an empty data blob.".to_string(),

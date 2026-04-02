@@ -1,5 +1,5 @@
 use std::{
-    mem::{size_of, zeroed},
+    mem::size_of,
     path::PathBuf,
     ptr::{copy_nonoverlapping, null_mut},
     sync::{
@@ -10,13 +10,14 @@ use std::{
 
 use parking_lot::Mutex;
 use windows_sys::Win32::{
-    Foundation::{HWND, POINT},
+    Foundation::{GlobalFree, HGLOBAL, POINT},
     System::{
         DataExchange::{
-            CF_UNICODETEXT, CloseClipboard, EmptyClipboard, GetClipboardData,
-            IsClipboardFormatAvailable, OpenClipboard, SetClipboardData,
+            CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable,
+            OpenClipboard, SetClipboardData,
         },
-        Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalFree, GlobalLock, GlobalUnlock, HGLOBAL},
+        Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock},
+        Ole::CF_UNICODETEXT,
     },
     UI::Shell::{DROPFILES, DragQueryFileW, HDROP},
 };
@@ -29,6 +30,7 @@ use crate::core::{
 
 /// Standard Windows clipboard format for file drops (`CF_HDROP`).
 const CF_HDROP_FORMAT: u32 = 15;
+const CF_UNICODETEXT_FORMAT: u32 = CF_UNICODETEXT as u32;
 
 static WINDOWS_CLIPBOARD_STATE: OnceLock<Arc<WindowsClipboardState>> = OnceLock::new();
 
@@ -180,7 +182,7 @@ struct ClipboardGuard;
 impl ClipboardGuard {
     fn open() -> AppResult<Self> {
         unsafe {
-            if OpenClipboard(0) == 0 {
+            if OpenClipboard(null_mut()) == 0 {
                 return Err(last_clipboard_error(
                     "Failed to open the Windows clipboard.",
                 ));
@@ -200,12 +202,12 @@ impl Drop for ClipboardGuard {
 
 fn read_unicode_text() -> Option<String> {
     unsafe {
-        if IsClipboardFormatAvailable(CF_UNICODETEXT) == 0 {
+        if IsClipboardFormatAvailable(CF_UNICODETEXT_FORMAT) == 0 {
             return None;
         }
 
-        let handle = GetClipboardData(CF_UNICODETEXT);
-        if handle == 0 {
+        let handle = GetClipboardData(CF_UNICODETEXT_FORMAT);
+        if handle.is_null() {
             return None;
         }
 
@@ -231,7 +233,7 @@ fn read_file_paths() -> Option<Vec<PathBuf>> {
         }
 
         let handle = GetClipboardData(CF_HDROP_FORMAT);
-        if handle == 0 {
+        if handle.is_null() {
             return None;
         }
 
@@ -272,7 +274,7 @@ fn write_unicode_text(text: &str) -> AppResult<()> {
 
     unsafe {
         let handle = GlobalAlloc(GMEM_MOVEABLE, bytes_len);
-        if handle == 0 {
+        if handle.is_null() {
             return Err(last_clipboard_error(
                 "Failed to allocate clipboard text buffer.",
             ));
@@ -289,7 +291,7 @@ fn write_unicode_text(text: &str) -> AppResult<()> {
         copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
         let _ = GlobalUnlock(handle);
 
-        if SetClipboardData(CF_UNICODETEXT, handle) == 0 {
+        if SetClipboardData(CF_UNICODETEXT_FORMAT, handle).is_null() {
             let _ = GlobalFree(handle);
             return Err(last_clipboard_error(
                 "Failed to publish text to the Windows clipboard.",
@@ -323,7 +325,7 @@ fn write_file_drop_list(paths: &[PathBuf]) -> AppResult<()> {
 
     unsafe {
         let handle = GlobalAlloc(GMEM_MOVEABLE, bytes_len);
-        if handle == 0 {
+        if handle.is_null() {
             return Err(last_clipboard_error(
                 "Failed to allocate clipboard file buffer.",
             ));
@@ -351,7 +353,7 @@ fn write_file_drop_list(paths: &[PathBuf]) -> AppResult<()> {
         );
         let _ = GlobalUnlock(handle);
 
-        if SetClipboardData(CF_HDROP_FORMAT, handle) == 0 {
+        if SetClipboardData(CF_HDROP_FORMAT, handle).is_null() {
             let _ = GlobalFree(handle);
             return Err(last_clipboard_error(
                 "Failed to publish files to the Windows clipboard.",

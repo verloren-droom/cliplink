@@ -6,43 +6,47 @@ mod paste;
 use std::{mem::size_of, ptr::null_mut};
 use windows_sys::Win32::{
     Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
-    Graphics::Gdi::{DEFAULT_GUI_FONT, GetStockObject, GetSysColorBrush, HGDIOBJ},
+    Graphics::Gdi::{
+        COLOR_WINDOW, DEFAULT_GUI_FONT, GetStockObject, GetSysColorBrush, HGDIOBJ, UpdateWindow,
+    },
     System::{
         DataExchange::{AddClipboardFormatListener, RemoveClipboardFormatListener},
         LibraryLoader::GetModuleHandleW,
     },
     UI::{
         Controls::{
-            HKM_GETHOTKEY, HKM_SETHOTKEY, ICC_STANDARD_CLASSES, ICC_TAB_CLASSES, ICC_WIN95_CLASSES,
-            INITCOMMONCONTROLSEX, InitCommonControlsEx, NMHDR, TASKDIALOG_BUTTON, TASKDIALOGCONFIG,
-            TASKDIALOGCONFIG_0, TCIF_TEXT, TCITEMW, TCM_GETCURSEL, TCM_INSERTITEMW, TCN_SELCHANGE,
-            TD_WARNING_ICON, TaskDialogIndirect,
+            BST_CHECKED, BST_UNCHECKED, EM_SETLIMITTEXT, HKM_GETHOTKEY, HKM_SETHOTKEY,
+            ICC_STANDARD_CLASSES, ICC_TAB_CLASSES, ICC_WIN95_CLASSES, INITCOMMONCONTROLSEX,
+            InitCommonControlsEx, NMHDR, TASKDIALOG_BUTTON, TASKDIALOGCONFIG, TASKDIALOGCONFIG_0,
+            TCIF_TEXT, TCITEMW, TCM_GETCURSEL, TCM_INSERTITEMW, TCN_SELCHANGE, TD_WARNING_ICON,
+            TaskDialogIndirect,
         },
-        Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey, VK_BACK, VK_CONTROL},
+        Input::KeyboardAndMouse::{
+            EnableWindow, GetKeyState, RegisterHotKey, SetFocus, UnregisterHotKey, VK_BACK,
+            VK_CONTROL,
+        },
         Shell::{
             NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
         },
         WindowsAndMessaging::{
             AppendMenuW, BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_PUSHBUTTON,
-            BST_CHECKED, BST_UNCHECKED, CB_ADDSTRING, CB_GETCURSEL, CB_RESETCONTENT, CB_SETCURSEL,
-            CBN_SELCHANGE, CBS_DROPDOWNLIST, COLOR_WINDOW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW,
-            CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
-            DestroyWindow, DispatchMessageW, EM_SETLIMITTEXT, EN_CHANGE, EnableWindow,
-            GWLP_USERDATA, GetClientRect, GetCursorPos, GetKeyState, GetMessageW,
-            GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, HCURSOR, HICON, HMENU,
-            IDC_ARROW, IDI_APPLICATION, IDYES, IsWindowVisible, LB_ADDSTRING, LB_GETCURSEL,
-            LB_GETTOPINDEX, LB_RESETCONTENT, LB_SETCURSEL, LB_SETTOPINDEX, LBN_DBLCLK,
-            LBN_SELCHANGE, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, LoadCursorW, LoadIconW,
-            MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MB_YESNO, MF_SEPARATOR, MF_STRING, MSG,
-            MessageBoxW, MoveWindow, PostQuitMessage, RegisterClassW, SPI_GETWORKAREA, SW_HIDE,
-            SW_SHOW, SW_SHOWNORMAL, SendMessageW, SetFocus, SetForegroundWindow, SetTimer,
-            SetWindowLongPtrW, SetWindowTextW, ShowWindow, SystemParametersInfoW, TPM_LEFTALIGN,
-            TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, UpdateWindow,
-            WA_INACTIVE, WM_ACTIVATE, WM_APP, WM_CLIPBOARDUPDATE, WM_CLOSE, WM_COMMAND, WM_DESTROY,
-            WM_HOTKEY, WM_KEYDOWN, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_SETFONT, WM_SIZE,
-            WM_TIMER, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_CLIENTEDGE,
-            WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_OVERLAPPED, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
-            WS_VISIBLE, WS_VSCROLL,
+            CB_ADDSTRING, CB_GETCURSEL, CB_RESETCONTENT, CB_SETCURSEL, CBN_SELCHANGE,
+            CBS_DROPDOWNLIST, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
+            CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
+            DispatchMessageW, EN_CHANGE, GWLP_USERDATA, GetClientRect, GetCursorPos, GetMessageW,
+            GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW,
+            IDI_APPLICATION, IDYES, IsWindowVisible, LB_ADDSTRING, LB_GETCURSEL, LB_GETTOPINDEX,
+            LB_RESETCONTENT, LB_SETCURSEL, LB_SETTOPINDEX, LBN_DBLCLK, LBN_SELCHANGE,
+            LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, LoadCursorW, LoadIconW, MB_ICONINFORMATION,
+            MB_ICONWARNING, MB_OK, MB_YESNO, MF_SEPARATOR, MF_STRING, MSG, MessageBoxW, MoveWindow,
+            PostQuitMessage, RegisterClassW, SPI_GETWORKAREA, SW_HIDE, SW_SHOW, SW_SHOWNORMAL,
+            SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowTextW,
+            ShowWindow, SystemParametersInfoW, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON,
+            TrackPopupMenu, TranslateMessage, WA_INACTIVE, WM_ACTIVATE, WM_APP, WM_CLIPBOARDUPDATE,
+            WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_HOTKEY, WM_KEYDOWN, WM_NCCREATE, WM_NCDESTROY,
+            WM_NOTIFY, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD,
+            WS_EX_CLIENTEDGE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_OVERLAPPED, WS_POPUP, WS_SYSMENU,
+            WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
         },
     },
 };
@@ -51,7 +55,7 @@ use crate::{
     constants::app::APP_NAME,
     controller::{
         AppController, HistoryActivation, HistoryRow, HistoryScope, HistoryScopeOption,
-        SettingsDeviceEntry, SettingsSnapshot, SettingsUpdate,
+        SettingsDeviceEntry, SettingsUpdate,
     },
     core::{
         at_rest::LocalDataCipher,
@@ -205,7 +209,7 @@ pub(super) fn run(controller: AppController) -> PlatformResult {
 impl WindowsApp {
     fn new(controller: AppController) -> AppResult<Self> {
         let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
-        if instance == 0 {
+        if instance.is_null() {
             return Err(AppError::InvalidConfig(
                 "Failed to obtain the Windows module handle.".to_string(),
             ));
@@ -215,7 +219,7 @@ impl WindowsApp {
             instance,
             default_font: unsafe { GetStockObject(DEFAULT_GUI_FONT) as HGDIOBJ as isize },
             controller,
-            main_hwnd: 0,
+            main_hwnd: null_mut(),
             history: HistoryControls::default(),
             history_scope_options: Vec::new(),
             selected_history_scope_key: HistoryScope::All.key(),
@@ -234,7 +238,7 @@ impl WindowsApp {
         self.register_window_class(HISTORY_CLASS_NAME)?;
         self.register_window_class(PREFERENCES_CLASS_NAME)?;
         self.main_hwnd =
-            self.create_top_level_window(MAIN_CLASS_NAME, APP_NAME, WS_OVERLAPPED, 0, 0, 0, 0)?;
+            self.create_top_level_window(MAIN_CLASS_NAME, APP_NAME, WS_OVERLAPPED, 0, 0, 0)?;
         self.install_clipboard_listener()?;
         self.install_tray_icon()?;
         self.refresh_global_hotkey()?;
@@ -243,26 +247,26 @@ impl WindowsApp {
     }
 
     unsafe fn shutdown(&mut self) {
-        if self.main_hwnd != 0 {
+        if !self.main_hwnd.is_null() {
             let _ = RemoveClipboardFormatListener(self.main_hwnd);
         }
 
-        if self.registered_hotkey.take().is_some() && self.main_hwnd != 0 {
+        if self.registered_hotkey.take().is_some() && !self.main_hwnd.is_null() {
             let _ = UnregisterHotKey(self.main_hwnd, GLOBAL_HOTKEY_ID);
         }
 
-        if self.main_hwnd != 0 {
+        if !self.main_hwnd.is_null() {
             let mut tray = self.tray_data();
             let _ = Shell_NotifyIconW(NIM_DELETE, &mut tray);
         }
 
-        if self.history.hwnd != 0 {
+        if !self.history.hwnd.is_null() {
             let _ = DestroyWindow(self.history.hwnd);
         }
-        if self.preferences.hwnd != 0 {
+        if !self.preferences.hwnd.is_null() {
             let _ = DestroyWindow(self.preferences.hwnd);
         }
-        if self.main_hwnd != 0 {
+        if !self.main_hwnd.is_null() {
             let _ = DestroyWindow(self.main_hwnd);
         }
     }
@@ -282,8 +286,8 @@ impl WindowsApp {
             lpfnWndProc: Some(app_wndproc),
             hInstance: self.instance,
             lpszClassName: class_name_wide.as_ptr(),
-            hCursor: LoadCursorW(0, IDC_ARROW as _),
-            hIcon: LoadIconW(0, IDI_APPLICATION as _),
+            hCursor: LoadCursorW(null_mut(), IDC_ARROW as _),
+            hIcon: LoadIconW(null_mut(), IDI_APPLICATION as _),
             hbrBackground: GetSysColorBrush(COLOR_WINDOW as i32),
             ..std::mem::zeroed()
         };
@@ -319,13 +323,13 @@ impl WindowsApp {
             CW_USEDEFAULT,
             width,
             height,
-            0,
-            0,
+            null_mut(),
+            null_mut(),
             self.instance,
             self as *mut _ as _,
         );
 
-        if hwnd == 0 {
+        if hwnd.is_null() {
             return Err(AppError::InvalidConfig(format!(
                 "Failed to create a Windows top-level window: {}",
                 std::io::Error::last_os_error()
@@ -363,14 +367,14 @@ impl WindowsApp {
         tray.uID = 1;
         tray.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         tray.uCallbackMessage = TRAY_CALLBACK_MESSAGE;
-        tray.hIcon = LoadIconW(0, IDI_APPLICATION as _);
+        tray.hIcon = LoadIconW(null_mut(), IDI_APPLICATION as _);
         copy_wide_into_fixed(&wide(APP_NAME), &mut tray.szTip);
         tray
     }
 
     unsafe fn message_loop(&mut self) {
-        let mut message = MSG::default();
-        while GetMessageW(&mut message, 0, 0, 0) > 0 {
+        let mut message = empty_msg();
+        while GetMessageW(&mut message, null_mut(), 0, 0) > 0 {
             if self.consume_history_clear_shortcut(&message) {
                 continue;
             }
@@ -503,25 +507,25 @@ impl WindowsApp {
     unsafe fn tick_controller(&mut self) {
         let outcome = self.controller.tick();
         if (outcome.history_changed || outcome.devices_changed)
-            && self.history.hwnd != 0
+            && !self.history.hwnd.is_null()
             && IsWindowVisible(self.history.hwnd) != 0
         {
             self.refresh_history_list(true);
         }
-        if self.history.hwnd != 0
+        if !self.history.hwnd.is_null()
             && IsWindowVisible(self.history.hwnd) != 0
             && outcome.status_changed
         {
             self.update_history_detail_label();
         }
-        if self.preferences.hwnd != 0
+        if !self.preferences.hwnd.is_null()
             && IsWindowVisible(self.preferences.hwnd) != 0
             && (outcome.devices_changed || outcome.status_changed)
         {
             self.refresh_preferences_devices_and_status();
         }
         if outcome.paste_requested {
-            if self.history.hwnd != 0 && IsWindowVisible(self.history.hwnd) != 0 {
+            if !self.history.hwnd.is_null() && IsWindowVisible(self.history.hwnd) != 0 {
                 self.hide_history_popup();
             }
             trigger_immediate_paste(self.previous_foreground);
@@ -542,7 +546,7 @@ impl WindowsApp {
 
     unsafe fn show_tray_menu(&mut self) {
         let menu = CreatePopupMenu();
-        if menu == 0 {
+        if menu.is_null() {
             return;
         }
 
@@ -566,7 +570,7 @@ impl WindowsApp {
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
         let _ = AppendMenuW(menu, MF_STRING, ID_MENU_QUIT as usize, quit.as_ptr());
 
-        let mut point = POINT::default();
+        let mut point = empty_point();
         let _ = GetCursorPos(&mut point);
         let _ = SetForegroundWindow(self.main_hwnd);
         let command = TrackPopupMenu(
@@ -590,7 +594,7 @@ impl WindowsApp {
     }
 
     unsafe fn ensure_history_window(&mut self) -> AppResult<()> {
-        if self.history.hwnd != 0 {
+        if !self.history.hwnd.is_null() {
             return Ok(());
         }
 
@@ -623,7 +627,12 @@ impl WindowsApp {
             hwnd,
             "ListBox",
             "",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT,
+            WS_CHILD
+                | WS_VISIBLE
+                | WS_TABSTOP
+                | WS_VSCROLL
+                | LBS_NOTIFY as u32
+                | LBS_NOINTEGRALHEIGHT as u32,
             WS_EX_CLIENTEDGE,
             ID_HISTORY_LIST,
         )?;
@@ -647,7 +656,7 @@ impl WindowsApp {
             hwnd,
             "Button",
             "清除（Ctrl+Back）",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
             0,
             ID_HISTORY_CLEAR,
         )?;
@@ -655,7 +664,7 @@ impl WindowsApp {
             hwnd,
             "Button",
             "删除",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
             0,
             ID_HISTORY_DELETE,
         )?;
@@ -663,7 +672,7 @@ impl WindowsApp {
             hwnd,
             "Button",
             "偏好设置",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
             0,
             ID_HISTORY_PREFERENCES,
         )?;
@@ -671,7 +680,7 @@ impl WindowsApp {
             hwnd,
             "Button",
             "退出",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
             0,
             ID_HISTORY_QUIT,
         )?;
@@ -692,7 +701,7 @@ impl WindowsApp {
     }
 
     unsafe fn ensure_preferences_window(&mut self) -> AppResult<()> {
-        if self.preferences.hwnd != 0 {
+        if !self.preferences.hwnd.is_null() {
             return Ok(());
         }
 
@@ -737,7 +746,7 @@ impl WindowsApp {
             hwnd,
             "Button",
             "共享本机剪切板历史",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX as u32,
             0,
             ID_PREFS_SHARE_LOCAL,
         )?;
@@ -745,7 +754,7 @@ impl WindowsApp {
             hwnd,
             "Button",
             "粘贴时优先远端最新内容",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX as u32,
             0,
             ID_PREFS_PREFER_REMOTE,
         )?;
@@ -753,7 +762,7 @@ impl WindowsApp {
             hwnd,
             "Button",
             "偏好设置打开时发现可用设备",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX as u32,
             0,
             ID_PREFS_DISCOVERY,
         )?;
@@ -763,7 +772,12 @@ impl WindowsApp {
             hwnd,
             "ListBox",
             "",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT,
+            WS_CHILD
+                | WS_VISIBLE
+                | WS_TABSTOP
+                | WS_VSCROLL
+                | LBS_NOTIFY as u32
+                | LBS_NOINTEGRALHEIGHT as u32,
             WS_EX_CLIENTEDGE,
             ID_PREFS_DEVICES_LIST,
         )?;
@@ -771,7 +785,7 @@ impl WindowsApp {
             hwnd,
             "Button",
             "设为信任",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
             0,
             ID_PREFS_TRUST,
         )?;
@@ -779,7 +793,7 @@ impl WindowsApp {
             hwnd,
             "Button",
             "移除信任",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
             0,
             ID_PREFS_REVOKE,
         )?;
@@ -811,7 +825,7 @@ impl WindowsApp {
             hwnd,
             "Button",
             "保存",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
             0,
             ID_PREFS_SAVE,
         )?;
@@ -819,7 +833,7 @@ impl WindowsApp {
             hwnd,
             "Button",
             "关闭",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
             0,
             ID_PREFS_CLOSE,
         )?;
@@ -881,7 +895,7 @@ impl WindowsApp {
             self.instance,
             null_mut(),
         );
-        if hwnd == 0 {
+        if hwnd.is_null() {
             return Err(AppError::InvalidConfig(format!(
                 "Failed to create a Windows child control: {}",
                 std::io::Error::last_os_error()
@@ -910,10 +924,10 @@ impl WindowsApp {
     }
 
     unsafe fn layout_history_controls(&self) {
-        if self.history.hwnd == 0 {
+        if self.history.hwnd.is_null() {
             return;
         }
-        let mut rect = RECT::default();
+        let mut rect = empty_rect();
         let _ = GetClientRect(self.history.hwnd, &mut rect);
         let width = rect.right - rect.left;
         let height = rect.bottom - rect.top;
@@ -983,11 +997,11 @@ impl WindowsApp {
     }
 
     unsafe fn layout_preferences_controls(&self) {
-        if self.preferences.hwnd == 0 {
+        if self.preferences.hwnd.is_null() {
             return;
         }
 
-        let mut rect = RECT::default();
+        let mut rect = empty_rect();
         let _ = GetClientRect(self.preferences.hwnd, &mut rect);
         let width = rect.right - rect.left;
         let height = rect.bottom - rect.top;
@@ -1139,7 +1153,7 @@ impl WindowsApp {
     }
 
     unsafe fn toggle_history_popup(&mut self) {
-        if self.history.hwnd != 0 && IsWindowVisible(self.history.hwnd) != 0 {
+        if !self.history.hwnd.is_null() && IsWindowVisible(self.history.hwnd) != 0 {
             self.hide_history_popup();
         } else {
             self.show_history_popup();
@@ -1151,13 +1165,11 @@ impl WindowsApp {
             return;
         }
 
-        self.previous_foreground = capture_foreground_window(
-            &[self.main_hwnd, self.history.hwnd, self.preferences.hwnd]
-                .into_iter()
-                .filter(|hwnd| *hwnd != 0)
-                .collect::<Vec<_>>()
-                .as_slice(),
-        );
+        let excluded = [self.main_hwnd, self.history.hwnd, self.preferences.hwnd]
+            .into_iter()
+            .filter(|hwnd| !hwnd.is_null())
+            .collect::<Vec<_>>();
+        self.previous_foreground = capture_foreground_window(excluded.as_slice());
         self.set_edit_text(self.history.search, "");
         self.refresh_history_list(false);
         self.position_history_window();
@@ -1167,14 +1179,14 @@ impl WindowsApp {
     }
 
     unsafe fn hide_history_popup(&self) {
-        if self.history.hwnd != 0 {
+        if !self.history.hwnd.is_null() {
             ShowWindow(self.history.hwnd, SW_HIDE);
         }
     }
 
     unsafe fn position_history_window(&self) {
-        let mut cursor = POINT::default();
-        let mut work_area = RECT::default();
+        let mut cursor = empty_point();
+        let mut work_area = empty_rect();
         let _ = GetCursorPos(&mut cursor);
         let _ = SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut work_area as *mut _ as *mut _, 0);
 
@@ -1200,7 +1212,7 @@ impl WindowsApp {
     }
 
     unsafe fn refresh_history_scope_options(&mut self) {
-        if self.history.scope == 0 {
+        if self.history.scope.is_null() {
             return;
         }
 
@@ -1234,7 +1246,7 @@ impl WindowsApp {
     }
 
     unsafe fn refresh_history_list(&mut self, preserve_scroll: bool) {
-        if self.history.list == 0 {
+        if self.history.list.is_null() {
             return;
         }
 
@@ -1278,7 +1290,7 @@ impl WindowsApp {
     }
 
     unsafe fn update_history_hotkey_label(&self) {
-        if self.history.hotkey == 0 {
+        if self.history.hotkey.is_null() {
             return;
         }
 
@@ -1290,7 +1302,7 @@ impl WindowsApp {
     }
 
     unsafe fn update_history_detail_label(&self) {
-        if self.history.detail == 0 {
+        if self.history.detail.is_null() {
             return;
         }
 
@@ -1352,7 +1364,7 @@ impl WindowsApp {
     unsafe fn consume_history_clear_shortcut(&mut self, message: &MSG) -> bool {
         if message.message != WM_KEYDOWN
             || message.wParam as u32 != VK_BACK as u32
-            || self.history.hwnd == 0
+            || self.history.hwnd.is_null()
             || IsWindowVisible(self.history.hwnd) == 0
         {
             return false;
@@ -1408,7 +1420,7 @@ impl WindowsApp {
     }
 
     unsafe fn hide_preferences(&mut self) {
-        if self.preferences.hwnd != 0 {
+        if !self.preferences.hwnd.is_null() {
             ShowWindow(self.preferences.hwnd, SW_HIDE);
         }
         let _ = self.controller.set_preferences_visible(false);
@@ -1586,7 +1598,7 @@ impl WindowsApp {
             }
             (ID_PREFS_TRUST, value) if value == BN_CLICKED as u16 => {
                 if let Some(device_id) = self.selected_preferences_device_id() {
-                    let _ = self.controller.trust_device(&device_id);
+                    let _ = self.controller.request_device_trust(&device_id);
                     self.refresh_preferences_devices_and_status();
                 }
             }
@@ -1677,7 +1689,7 @@ impl WindowsApp {
     }
 
     unsafe fn refresh_global_hotkey(&mut self) -> AppResult<()> {
-        if self.registered_hotkey.take().is_some() && self.main_hwnd != 0 {
+        if self.registered_hotkey.take().is_some() && !self.main_hwnd.is_null() {
             let _ = UnregisterHotKey(self.main_hwnd, GLOBAL_HOTKEY_ID);
         }
 
@@ -1718,8 +1730,8 @@ impl WindowsApp {
         let verification = wide("同时清除锁定条目");
         let clear = wide("清除");
         let cancel = wide("取消");
-        let owner = if self.history_hwnd != 0 {
-            self.history_hwnd
+        let owner = if !self.history.hwnd.is_null() {
+            self.history.hwnd
         } else {
             self.main_hwnd
         };
@@ -1788,8 +1800,8 @@ impl WindowsApp {
             "将移除与“{}”的信任关系，并通知对方同步解除信任。\n\n移除后需重新发起连接请求才能再次共享。",
             device_name
         ));
-        let owner = if self.preferences_hwnd != 0 {
-            self.preferences_hwnd
+        let owner = if !self.preferences.hwnd.is_null() {
+            self.preferences.hwnd
         } else {
             self.main_hwnd
         };
@@ -1871,6 +1883,30 @@ fn loword(value: usize) -> u16 {
 
 fn hiword(value: usize) -> u16 {
     ((value >> 16) & 0xFFFF) as u16
+}
+
+fn empty_point() -> POINT {
+    POINT { x: 0, y: 0 }
+}
+
+fn empty_rect() -> RECT {
+    RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    }
+}
+
+fn empty_msg() -> MSG {
+    MSG {
+        hwnd: null_mut(),
+        message: 0,
+        wParam: 0,
+        lParam: 0,
+        time: 0,
+        pt: empty_point(),
+    }
 }
 
 fn one_line_text(value: &str) -> String {
