@@ -197,7 +197,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun configureHistoryPane() {
         historyList.layoutManager = LinearLayoutManager(this)
-        historyList.setHasFixedSize(true)
         historyList.itemAnimator = null
         historyList.adapter = adapter
 
@@ -323,7 +322,6 @@ class MainActivity : AppCompatActivity() {
             preferencesDirty = true
         }
         devicesList.layoutManager = LinearLayoutManager(this)
-        devicesList.setHasFixedSize(true)
         devicesList.itemAnimator = null
         devicesList.adapter = deviceAdapter
 

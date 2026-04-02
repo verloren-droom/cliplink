@@ -1370,7 +1370,7 @@ impl WindowsApp {
             return false;
         }
 
-        if (GetKeyState(VK_CONTROL as i32) & 0x8000) == 0 {
+        if GetKeyState(VK_CONTROL as i32) >= 0 {
             return false;
         }
 
