@@ -3,6 +3,7 @@
 
 # Distribution and packaging artifacts
 /dist/
+/packaging/
 *.dmg
 *.pkg
 *.zip
@@ -46,4 +47,5 @@ Thumbs.db
 # Local environment and logs
 .env
 .env.*
+/scripts/build.env
 *.log

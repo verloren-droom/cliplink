@@ -6,6 +6,29 @@ plugins {
     kotlin("android")
 }
 
+val androidReleaseKeystorePath = providers.environmentVariable("ANDROID_KEYSTORE_PATH")
+    .orNull
+    ?.trim()
+    ?.takeIf { it.isNotEmpty() }
+val androidReleaseStorePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD")
+    .orNull
+    ?.trim()
+    ?.takeIf { it.isNotEmpty() }
+val androidReleaseKeyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS")
+    .orNull
+    ?.trim()
+    ?.takeIf { it.isNotEmpty() }
+val androidReleaseKeyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD")
+    .orNull
+    ?.trim()
+    ?.takeIf { it.isNotEmpty() }
+val androidReleaseSigningReady = listOf(
+    androidReleaseKeystorePath,
+    androidReleaseStorePassword,
+    androidReleaseKeyAlias,
+    androidReleaseKeyPassword,
+).all { it != null }
+
 android {
     namespace = "com.benfach.cliplink"
     compileSdk = 34
@@ -23,6 +46,19 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            if (androidReleaseSigningReady) {
+                storeFile = file(androidReleaseKeystorePath!!)
+                storePassword = androidReleaseStorePassword
+                keyAlias = androidReleaseKeyAlias
+                keyPassword = androidReleaseKeyPassword
+                enableV1Signing = true
+                enableV2Signing = true
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -30,6 +66,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            if (androidReleaseSigningReady) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
@@ -69,7 +108,7 @@ fun commandOutput(vararg command: String): String? {
     return stdout.toString().trim().takeIf { it.isNotEmpty() }
 }
 
-val rustupToolchain = providers.environmentVariable("CLIPLINK_RUSTUP_TOOLCHAIN")
+val rustupToolchain = providers.environmentVariable("RUSTUP_TOOLCHAIN")
     .orNull
     ?.trim()
     ?.takeIf { it.isNotEmpty() }

@@ -111,6 +111,15 @@ jobs:
             release_reason="Version changed, but tag ${release_tag} already exists."
           fi
 
+          echo "Current version: ${current_version}"
+          echo "Release tag: ${release_tag}"
+          if [[ -n "$previous_version" ]]; then
+            echo "Previous version: ${previous_version}"
+          else
+            echo "Previous version: <none>"
+          fi
+          echo "Tag already exists: ${tag_exists}"
+
           {
             echo "version=${current_version}"
             echo "tag=${release_tag}"
@@ -120,16 +129,18 @@ jobs:
 
       - name: Print Decision
         run: |
-          echo "version=${{ steps.detect.outputs.version }}"
-          echo "tag=${{ steps.detect.outputs.tag }}"
-          echo "should_release=${{ steps.detect.outputs.should_release }}"
-          echo "reason=${{ steps.detect.outputs.release_reason }}"
+          echo "Release decision summary:"
+          echo "  version=${{ steps.detect.outputs.version }}"
+          echo "  tag=${{ steps.detect.outputs.tag }}"
+          echo "  should_release=${{ steps.detect.outputs.should_release }}"
+          echo "  reason=${{ steps.detect.outputs.release_reason }}"
 
   build-macos:
     name: Build macOS Assets
     runs-on: macos-latest
     needs: detect-version
     if: needs.detect-version.outputs.should_release == 'true'
+    environment: release
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -140,10 +151,85 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
 
+      - name: Prepare macOS Signing Certificate
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_P12_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_P12_PASSWORD }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          : "${MACOS_CERTIFICATE_P12_BASE64:?Missing release secret MACOS_CERTIFICATE_P12_BASE64}"
+          : "${MACOS_CERTIFICATE_P12_PASSWORD:?Missing release secret MACOS_CERTIFICATE_P12_PASSWORD}"
+          : "${MACOS_KEYCHAIN_PASSWORD:?Missing release secret MACOS_KEYCHAIN_PASSWORD}"
+
+          mkdir -p packaging/macos
+
+          certificate_path="$GITHUB_WORKSPACE/packaging/macos/signing.p12"
+          keychain_path="$RUNNER_TEMP/cliplink-signing.keychain-db"
+
+          printf '%s' "$MACOS_CERTIFICATE_P12_BASE64" | base64 -D > "$certificate_path"
+          security create-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
+          security import "$certificate_path" \
+            -k "$keychain_path" \
+            -P "$MACOS_CERTIFICATE_P12_PASSWORD" \
+            -f pkcs12 \
+            -A
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$MACOS_KEYCHAIN_PASSWORD" \
+            "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+
+          {
+            echo "MACOS_SIGNING_KEYCHAIN=$keychain_path"
+          } >> "$GITHUB_ENV"
+
+          echo "Prepared macOS signing certificate in packaging/macos."
+          echo "Configured temporary keychain for codesign."
+
       - name: Build macOS Release
         run: |
           chmod +x scripts/build.sh
           ./scripts/build.sh macos-release
+          echo "macOS build outputs:"
+          find dist -maxdepth 1 -type d -name '*.app' | sort
+
+      - name: Sign macOS App Bundle
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+
+          : "${MACOS_SIGNING_IDENTITY:?Missing release secret MACOS_SIGNING_IDENTITY}"
+
+          app_path="$(find dist -maxdepth 1 -type d -name '*.app' | head -n 1)"
+          [[ -n "$app_path" ]] || {
+            echo "No macOS .app bundle was produced in dist/." >&2
+            exit 1
+          }
+
+          codesign --force --deep --sign "$MACOS_SIGNING_IDENTITY" --timestamp "$app_path"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          echo "Signed macOS app bundle: $app_path"
+
+      - name: Package Signed macOS App Bundle
+        run: |
+          set -euo pipefail
+
+          app_path="$(find dist -maxdepth 1 -type d -name '*.app' | head -n 1)"
+          [[ -n "$app_path" ]] || {
+            echo "No macOS .app bundle was produced in dist/." >&2
+            exit 1
+          }
+
+          zip_path="${app_path}.zip"
+          rm -f "$zip_path"
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" "$zip_path"
+          echo "Packaged macOS release asset: $zip_path"
 
       - name: Upload macOS Artifacts
         uses: actions/upload-artifact@v4
@@ -151,14 +237,14 @@ jobs:
           name: release-macos
           if-no-files-found: error
           path: |
-            dist/*.zip
-            dist/*.tar.xz
+            dist/*.app.zip
 
   build-windows:
     name: Build Windows Assets
     runs-on: windows-latest
     needs: detect-version
     if: needs.detect-version.outputs.should_release == 'true'
+    environment: release
     defaults:
       run:
         shell: bash
@@ -178,7 +264,59 @@ jobs:
           ./scripts/build.sh windows-setup
 
       - name: Build Windows Release
-        run: ./scripts/build.sh windows-release
+        run: |
+          ./scripts/build.sh windows-release
+          echo "Windows build outputs:"
+          find dist -maxdepth 1 -type f -name '*.exe' | sort
+
+      - name: Prepare Windows Signing Certificate
+        env:
+          WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
+          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          : "${WINDOWS_PFX_BASE64:?Missing release secret WINDOWS_PFX_BASE64}"
+          : "${WINDOWS_PFX_PASSWORD:?Missing release secret WINDOWS_PFX_PASSWORD}"
+
+          mkdir -p packaging/windows
+
+          certificate_path="$GITHUB_WORKSPACE/packaging/windows/signing.pfx"
+          printf '%s' "$WINDOWS_PFX_BASE64" | base64 --decode > "$certificate_path"
+
+          {
+            echo "WINDOWS_PFX_PATH=$certificate_path"
+          } >> "$GITHUB_ENV"
+
+          echo "Prepared Windows signing certificate in packaging/windows."
+
+      - name: Sign Windows Executable
+        env:
+          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
+          WINDOWS_TIMESTAMP_URL: http://timestamp.digicert.com
+        run: |
+          set -euo pipefail
+
+          pwsh -NoProfile -Command '
+            $signtool = (Get-Command signtool.exe -ErrorAction Stop).Source
+            $exeFiles = Get-ChildItem -Path "dist" -Filter "*.exe" -File
+            if ($exeFiles.Count -eq 0) {
+              throw "No Windows executable was produced in dist/."
+            }
+            foreach ($exe in $exeFiles) {
+              & $signtool sign `
+                /fd SHA256 `
+                /td SHA256 `
+                /tr $env:WINDOWS_TIMESTAMP_URL `
+                /f $env:WINDOWS_PFX_PATH `
+                /p $env:WINDOWS_PFX_PASSWORD `
+                $exe.FullName
+              if ($LASTEXITCODE -ne 0) {
+                throw "signtool failed for $($exe.FullName)"
+              }
+              Write-Host "Signed Windows executable: $($exe.FullName)"
+            }
+          '
 
       - name: Upload Windows Artifacts
         uses: actions/upload-artifact@v4
@@ -187,14 +325,13 @@ jobs:
           if-no-files-found: error
           path: |
             dist/*.exe
-            dist/*.zip
-            dist/*.tar.xz
 
   build-android:
     name: Build Android Assets
     runs-on: ubuntu-latest
     needs: detect-version
     if: needs.detect-version.outputs.should_release == 'true'
+    environment: release
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -231,8 +368,41 @@ jobs:
           chmod +x scripts/build.sh
           ./scripts/build.sh android-setup
 
+      - name: Prepare Android Signing Keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          : "${ANDROID_KEYSTORE_BASE64:?Missing release secret ANDROID_KEYSTORE_BASE64}"
+          : "${ANDROID_KEYSTORE_PASSWORD:?Missing release secret ANDROID_KEYSTORE_PASSWORD}"
+          : "${ANDROID_KEY_ALIAS:?Missing release secret ANDROID_KEY_ALIAS}"
+          : "${ANDROID_KEY_PASSWORD:?Missing release secret ANDROID_KEY_PASSWORD}"
+
+          mkdir -p packaging/android
+
+          keystore_path="$GITHUB_WORKSPACE/packaging/android/release.keystore"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
+          chmod 600 "$keystore_path"
+
+          {
+            echo "ANDROID_KEYSTORE_PATH=$keystore_path"
+            echo "ANDROID_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD"
+            echo "ANDROID_KEY_ALIAS=$ANDROID_KEY_ALIAS"
+            echo "ANDROID_KEY_PASSWORD=$ANDROID_KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+
+          echo "Prepared Android signing keystore in packaging/android."
+          echo "Configured Gradle release signing environment variables."
+
       - name: Build Android Release
-        run: ./scripts/build.sh android-release
+        run: |
+          ./scripts/build.sh android-release
+          echo "Android build outputs:"
+          find android/app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' | sort
 
       - name: Upload Android Artifacts
         uses: actions/upload-artifact@v4
@@ -262,6 +432,8 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
+
+          echo "Ensuring release tag ${RELEASE_TAG} points at ${RELEASE_TARGET}"
 
           if gh api "repos/${REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
             echo "Tag ${RELEASE_TAG} already exists."
@@ -299,6 +471,10 @@ jobs:
             echo "No release assets were produced." >&2
             exit 1
           fi
+
+          echo "Publishing GitHub Release for ${RELEASE_TAG}"
+          echo "Assets to upload:"
+          printf '  %s\n' "${assets[@]}"
 
           if ! gh release view "$RELEASE_TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" \
