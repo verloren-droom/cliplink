@@ -135,109 +135,109 @@ jobs:
           echo "  should_release=${{ steps.detect.outputs.should_release }}"
           echo "  reason=${{ steps.detect.outputs.release_reason }}"
 
-  build-macos:
-    name: Build macOS Assets
-    runs-on: macos-latest
-    needs: detect-version
-    if: needs.detect-version.outputs.should_release == 'true'
-    environment: release
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
+  # build-macos:
+  #   name: Build macOS Assets
+  #   runs-on: macos-latest
+  #   needs: detect-version
+  #   if: needs.detect-version.outputs.should_release == 'true'
+  #   environment: release
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v5
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+  #     - name: Setup Rust
+  #       uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
+  #     - name: Cache Rust
+  #       uses: Swatinem/rust-cache@v2
 
-      - name: Prepare macOS Signing Certificate
-        env:
-          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
-          MACOS_CERTIFICATE_P12_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_P12_PASSWORD }}
-          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
-        run: |
-          set -euo pipefail
+  #     - name: Prepare macOS Signing Certificate
+  #       env:
+  #         MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+  #         MACOS_CERTIFICATE_P12_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_P12_PASSWORD }}
+  #         MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+  #       run: |
+  #         set -euo pipefail
 
-          : "${MACOS_CERTIFICATE_P12_BASE64:?Missing release secret MACOS_CERTIFICATE_P12_BASE64}"
-          : "${MACOS_CERTIFICATE_P12_PASSWORD:?Missing release secret MACOS_CERTIFICATE_P12_PASSWORD}"
-          : "${MACOS_KEYCHAIN_PASSWORD:?Missing release secret MACOS_KEYCHAIN_PASSWORD}"
+  #         : "${MACOS_CERTIFICATE_P12_BASE64:?Missing release secret MACOS_CERTIFICATE_P12_BASE64}"
+  #         : "${MACOS_CERTIFICATE_P12_PASSWORD:?Missing release secret MACOS_CERTIFICATE_P12_PASSWORD}"
+  #         : "${MACOS_KEYCHAIN_PASSWORD:?Missing release secret MACOS_KEYCHAIN_PASSWORD}"
 
-          mkdir -p packaging/macos
+  #         mkdir -p packaging/macos
 
-          certificate_path="$GITHUB_WORKSPACE/packaging/macos/signing.p12"
-          keychain_path="$RUNNER_TEMP/cliplink-signing.keychain-db"
+  #         certificate_path="$GITHUB_WORKSPACE/packaging/macos/signing.p12"
+  #         keychain_path="$RUNNER_TEMP/cliplink-signing.keychain-db"
 
-          printf '%s' "$MACOS_CERTIFICATE_P12_BASE64" | base64 -D > "$certificate_path"
-          security create-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
-          security set-keychain-settings -lut 21600 "$keychain_path"
-          security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
-          security import "$certificate_path" \
-            -k "$keychain_path" \
-            -P "$MACOS_CERTIFICATE_P12_PASSWORD" \
-            -f pkcs12 \
-            -A
-          security set-key-partition-list \
-            -S apple-tool:,apple:,codesign: \
-            -s \
-            -k "$MACOS_KEYCHAIN_PASSWORD" \
-            "$keychain_path"
-          security list-keychains -d user -s "$keychain_path"
+  #         printf '%s' "$MACOS_CERTIFICATE_P12_BASE64" | base64 -D > "$certificate_path"
+  #         security create-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
+  #         security set-keychain-settings -lut 21600 "$keychain_path"
+  #         security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
+  #         security import "$certificate_path" \
+  #           -k "$keychain_path" \
+  #           -P "$MACOS_CERTIFICATE_P12_PASSWORD" \
+  #           -f pkcs12 \
+  #           -A
+  #         security set-key-partition-list \
+  #           -S apple-tool:,apple:,codesign: \
+  #           -s \
+  #           -k "$MACOS_KEYCHAIN_PASSWORD" \
+  #           "$keychain_path"
+  #         security list-keychains -d user -s "$keychain_path"
 
-          {
-            echo "MACOS_SIGNING_KEYCHAIN=$keychain_path"
-          } >> "$GITHUB_ENV"
+  #         {
+  #           echo "MACOS_SIGNING_KEYCHAIN=$keychain_path"
+  #         } >> "$GITHUB_ENV"
 
-          echo "Prepared macOS signing certificate in packaging/macos."
-          echo "Configured temporary keychain for codesign."
+  #         echo "Prepared macOS signing certificate in packaging/macos."
+  #         echo "Configured temporary keychain for codesign."
 
-      - name: Build macOS Release
-        run: |
-          chmod +x scripts/build.sh
-          ./scripts/build.sh macos-release
-          echo "macOS build outputs:"
-          find dist -maxdepth 1 -type d -name '*.app' | sort
+  #     - name: Build macOS Release
+  #       run: |
+  #         chmod +x scripts/build.sh
+  #         ./scripts/build.sh macos-release
+  #         echo "macOS build outputs:"
+  #         find dist -maxdepth 1 -type d -name '*.app' | sort
 
-      - name: Sign macOS App Bundle
-        env:
-          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-        run: |
-          set -euo pipefail
+  #     - name: Sign macOS App Bundle
+  #       env:
+  #         MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+  #       run: |
+  #         set -euo pipefail
 
-          : "${MACOS_SIGNING_IDENTITY:?Missing release secret MACOS_SIGNING_IDENTITY}"
+  #         : "${MACOS_SIGNING_IDENTITY:?Missing release secret MACOS_SIGNING_IDENTITY}"
 
-          app_path="$(find dist -maxdepth 1 -type d -name '*.app' | head -n 1)"
-          [[ -n "$app_path" ]] || {
-            echo "No macOS .app bundle was produced in dist/." >&2
-            exit 1
-          }
+  #         app_path="$(find dist -maxdepth 1 -type d -name '*.app' | head -n 1)"
+  #         [[ -n "$app_path" ]] || {
+  #           echo "No macOS .app bundle was produced in dist/." >&2
+  #           exit 1
+  #         }
 
-          codesign --force --deep --sign "$MACOS_SIGNING_IDENTITY" --timestamp "$app_path"
-          codesign --verify --deep --strict --verbose=2 "$app_path"
-          echo "Signed macOS app bundle: $app_path"
+  #         codesign --force --deep --sign "$MACOS_SIGNING_IDENTITY" --timestamp "$app_path"
+  #         codesign --verify --deep --strict --verbose=2 "$app_path"
+  #         echo "Signed macOS app bundle: $app_path"
 
-      - name: Package Signed macOS App Bundle
-        run: |
-          set -euo pipefail
+  #     - name: Package Signed macOS App Bundle
+  #       run: |
+  #         set -euo pipefail
 
-          app_path="$(find dist -maxdepth 1 -type d -name '*.app' | head -n 1)"
-          [[ -n "$app_path" ]] || {
-            echo "No macOS .app bundle was produced in dist/." >&2
-            exit 1
-          }
+  #         app_path="$(find dist -maxdepth 1 -type d -name '*.app' | head -n 1)"
+  #         [[ -n "$app_path" ]] || {
+  #           echo "No macOS .app bundle was produced in dist/." >&2
+  #           exit 1
+  #         }
 
-          zip_path="${app_path}.zip"
-          rm -f "$zip_path"
-          ditto -c -k --sequesterRsrc --keepParent "$app_path" "$zip_path"
-          echo "Packaged macOS release asset: $zip_path"
+  #         zip_path="${app_path}.zip"
+  #         rm -f "$zip_path"
+  #         ditto -c -k --sequesterRsrc --keepParent "$app_path" "$zip_path"
+  #         echo "Packaged macOS release asset: $zip_path"
 
-      - name: Upload macOS Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-macos
-          if-no-files-found: error
-          path: |
-            dist/*.app.zip
+  #     - name: Upload macOS Artifacts
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: release-macos
+  #         if-no-files-found: error
+  #         path: |
+  #           dist/*.app.zip
 
   # build-windows:
   #   name: Build Windows Assets
