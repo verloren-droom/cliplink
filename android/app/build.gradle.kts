@@ -1,5 +1,8 @@
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.util.Locale
+import javax.xml.parsers.DocumentBuilderFactory
+import org.w3c.dom.Element
 
 plugins {
     id("com.android.application")
@@ -91,6 +94,23 @@ android {
 
 val rustWorkspaceDir = rootDir.parentFile
 val rustOutputDir = layout.buildDirectory.dir("rustJniLibs")
+val generatedLauncherIconsResDir = layout.buildDirectory.dir("generated/res/launcherIcons")
+
+android.sourceSets["main"].res.srcDir(generatedLauncherIconsResDir)
+
+data class SvgPathSpec(
+    val pathData: String,
+    val fillColor: String?,
+    val strokeColor: String?,
+    val strokeWidth: String?,
+    val strokeLineCap: String?,
+    val strokeLineJoin: String?,
+)
+
+data class SvgViewportSpec(
+    val width: String,
+    val height: String,
+)
 
 fun commandOutput(vararg command: String): String? {
     val stdout = ByteArrayOutputStream()
@@ -107,6 +127,160 @@ fun commandOutput(vararg command: String): String? {
         return null
     }
     return stdout.toString().trim().takeIf { it.isNotEmpty() }
+}
+
+fun normalizeSvgPaint(value: String?): String? {
+    val normalized = value?.trim().orEmpty()
+    if (normalized.isEmpty() || normalized.equals("none", ignoreCase = true)) {
+        return null
+    }
+    return when {
+        normalized.startsWith("#") -> normalized.uppercase(Locale.ROOT)
+        normalized.equals("black", ignoreCase = true) -> "#000000"
+        normalized.equals("white", ignoreCase = true) -> "#FFFFFF"
+        else -> error("Unsupported SVG paint value: $normalized")
+    }
+}
+
+fun parseSvgViewport(svgRoot: Element): SvgViewportSpec {
+    val viewBoxParts = svgRoot.getAttribute("viewBox").trim().split(Regex("\\s+"))
+    require(viewBoxParts.size == 4) {
+        "resources/icon.svg must define a four-value viewBox"
+    }
+    return SvgViewportSpec(
+        width = viewBoxParts[2],
+        height = viewBoxParts[3],
+    )
+}
+
+fun parseSvgPaths(svgFile: File): Pair<SvgViewportSpec, List<SvgPathSpec>> {
+    val documentBuilderFactory = DocumentBuilderFactory.newInstance().apply {
+        isNamespaceAware = false
+    }
+    val document = documentBuilderFactory.newDocumentBuilder().parse(svgFile)
+    val svgRoot = document.documentElement
+    val viewport = parseSvgViewport(svgRoot)
+    val pathNodes = svgRoot.getElementsByTagName("path")
+    val paths = buildList(pathNodes.length) {
+        for (index in 0 until pathNodes.length) {
+            val node = pathNodes.item(index)
+            if (node !is Element) continue
+            add(
+                SvgPathSpec(
+                    pathData = node.getAttribute("d").trim().ifEmpty {
+                        error("SVG path is missing d attribute")
+                    },
+                    fillColor = normalizeSvgPaint(node.getAttribute("fill")),
+                    strokeColor = normalizeSvgPaint(node.getAttribute("stroke")),
+                    strokeWidth = node.getAttribute("stroke-width").trim().ifEmpty { null },
+                    strokeLineCap = node.getAttribute("stroke-linecap").trim().ifEmpty { null },
+                    strokeLineJoin = node.getAttribute("stroke-linejoin").trim().ifEmpty { null },
+                )
+            )
+        }
+    }
+    require(paths.isNotEmpty()) {
+        "resources/icon.svg must contain at least one path"
+    }
+    return viewport to paths
+}
+
+fun androidPaintValue(original: String?, overrideColor: String? = null): String {
+    return overrideColor ?: original ?: "#00000000"
+}
+
+fun svgPathToVectorXml(path: SvgPathSpec, monochrome: Boolean): String {
+    val colorOverride = if (monochrome) "#111111" else null
+    return buildString {
+        appendLine("    <path")
+        appendLine("        android:fillColor=\"${androidPaintValue(path.fillColor, if (path.fillColor != null) colorOverride else null)}\"")
+        appendLine("        android:pathData=\"${path.pathData}\"")
+        if (path.strokeColor != null) {
+            appendLine("        android:strokeColor=\"${androidPaintValue(path.strokeColor, colorOverride)}\"")
+        }
+        path.strokeLineCap?.let { appendLine("        android:strokeLineCap=\"$it\"") }
+        path.strokeLineJoin?.let { appendLine("        android:strokeLineJoin=\"$it\"") }
+        path.strokeWidth?.let { appendLine("        android:strokeWidth=\"$it\"") }
+        appendLine(" />")
+    }
+}
+
+fun buildLauncherVectorDrawableXml(
+    viewport: SvgViewportSpec,
+    paths: List<SvgPathSpec>,
+    monochrome: Boolean,
+): String {
+    return buildString {
+        appendLine("<?xml version=\"1.0\" encoding=\"utf-8\"?>")
+        appendLine("<vector xmlns:android=\"http://schemas.android.com/apk/res/android\"")
+        appendLine("    android:width=\"108dp\"")
+        appendLine("    android:height=\"108dp\"")
+        appendLine("    android:viewportWidth=\"${viewport.width}\"")
+        appendLine("    android:viewportHeight=\"${viewport.height}\">")
+        for (path in paths) {
+            append(svgPathToVectorXml(path, monochrome))
+        }
+        appendLine("</vector>")
+    }
+}
+
+fun buildAdaptiveIconXml(): String {
+    return """
+        <?xml version="1.0" encoding="utf-8"?>
+        <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+            <background android:drawable="@color/color_launcher_background" />
+            <foreground android:drawable="@drawable/ic_launcher_foreground" />
+            <monochrome android:drawable="@drawable/ic_launcher_monochrome" />
+        </adaptive-icon>
+    """.trimIndent() + "\n"
+}
+
+fun writeTextFile(file: File, content: String) {
+    file.parentFile.mkdirs()
+    file.writeText(content)
+}
+
+fun generateLauncherIconResources(svgFile: File, outputDir: File) {
+    val (viewport, paths) = parseSvgPaths(svgFile)
+
+    outputDir.deleteRecursively()
+    outputDir.mkdirs()
+
+    writeTextFile(
+        outputDir.resolve("drawable/ic_launcher_foreground.xml"),
+        buildLauncherVectorDrawableXml(viewport, paths, monochrome = false),
+    )
+    writeTextFile(
+        outputDir.resolve("drawable/ic_launcher_monochrome.xml"),
+        buildLauncherVectorDrawableXml(viewport, paths, monochrome = true),
+    )
+    writeTextFile(
+        outputDir.resolve("mipmap-anydpi-v26/ic_launcher.xml"),
+        buildAdaptiveIconXml(),
+    )
+    writeTextFile(
+        outputDir.resolve("mipmap-anydpi-v26/ic_launcher_round.xml"),
+        buildAdaptiveIconXml(),
+    )
+}
+
+val generateLauncherIcons by tasks.registering {
+    val sourceIconFile = rustWorkspaceDir.resolve("resources/icon.svg")
+
+    inputs.file(sourceIconFile)
+    outputs.dir(generatedLauncherIconsResDir)
+    outputs.upToDateWhen { false }
+
+    doLast {
+        require(sourceIconFile.isFile) {
+            "Missing launcher icon source: ${sourceIconFile.absolutePath}"
+        }
+        generateLauncherIconResources(sourceIconFile, generatedLauncherIconsResDir.get().asFile)
+    }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(generateLauncherIcons)
 }
 
 val rustupToolchain = providers.environmentVariable("RUSTUP_TOOLCHAIN")

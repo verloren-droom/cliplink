@@ -8,17 +8,14 @@ use crate::{
     platform::macos::widgets::{make_menu_item, truncate_menu_title},
 };
 
-fn tray_placeholder_image() -> Option<Retained<NSImage>> {
-    let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
-        &NSString::from_str("square.fill"),
-        Some(&NSString::from_str(APP_NAME)),
-    )?;
-    image.setTemplate(true);
-    image.setSize(NSSize::new(10.0, 10.0));
-    Some(image)
-}
-
 impl AppDelegate {
+    pub(super) fn install_application_icon(&self) {
+        let app = NSApplication::sharedApplication(self.mtm());
+        unsafe {
+            app.setApplicationIconImage(Some(self.application_icon_image()));
+        }
+    }
+
     pub(super) fn install_status_item(&self, mtm: MainThreadMarker) {
         let status_bar = NSStatusBar::systemStatusBar();
         let status_item = status_bar.statusItemWithLength(NSVariableStatusItemLength);
@@ -26,10 +23,8 @@ impl AppDelegate {
 
         if let Some(button) = status_item.button(mtm) {
             button.setTitle(ns_string!(""));
-            if let Some(image) = tray_placeholder_image() {
-                button.setImage(Some(&image));
-                button.setImageScaling(NSImageScaling::ScaleProportionallyDown);
-            }
+            button.setImage(Some(self.status_item_icon_image()));
+            button.setImageScaling(NSImageScaling::ScaleProportionallyDown);
             button.sendActionOn(NSEventMask::LeftMouseUp);
             unsafe {
                 button.setTarget(Some(self));

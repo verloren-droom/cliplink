@@ -17,7 +17,7 @@ use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSBackingStoreType,
     NSButton, NSColor, NSControl, NSControlTextEditingDelegate, NSEvent, NSEventMask,
     NSEventModifierFlags, NSEventType, NSFloatingWindowLevel, NSFont, NSImage, NSImageScaling,
-    NSLineBreakMode, NSMenu, NSMenuDelegate, NSMenuItem, NSPanel, NSPopUpButton,
+    NSImageView, NSLineBreakMode, NSMenu, NSMenuDelegate, NSMenuItem, NSPanel, NSPopUpButton,
     NSPopUpMenuWindowLevel, NSScreen, NSScrollView, NSSearchField, NSSearchFieldDelegate,
     NSStatusBar, NSStatusItem, NSStatusItemBehavior, NSTabView, NSTabViewItem, NSTabViewType,
     NSTableCellView, NSTableColumn, NSTableColumnResizingOptions, NSTableView,
@@ -48,6 +48,7 @@ mod actions;
 mod autostart;
 mod clipboard;
 mod hotkey;
+mod icons;
 mod keychain;
 mod panel;
 mod paste;
@@ -75,7 +76,9 @@ struct AppDelegateIvars {
     menu_history_ids: RefCell<Vec<Uuid>>,
     previous_frontmost_bundle_id: RefCell<Option<String>>,
     active_trust_prompt_id: RefCell<Option<Uuid>>,
+    application_icon: OnceCell<Retained<NSImage>>,
     status_item: OnceCell<Retained<NSStatusItem>>,
+    status_item_icon: OnceCell<Retained<NSImage>>,
     status_menu: OnceCell<Retained<NSMenu>>,
     history_context_menu: RefCell<Option<Retained<NSMenu>>>,
     history_context_separator_item: RefCell<Option<Retained<NSMenuItem>>>,
@@ -130,6 +133,7 @@ define_class!(
             let app = NSApplication::sharedApplication(mtm);
             app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 
+            self.install_application_icon();
             self.install_status_item(mtm);
             let launch_at_login = self.ivars().controller.borrow().launch_at_login_enabled();
             let autostart_sync = match autostart::launch_at_login_enabled() {
@@ -466,7 +470,9 @@ impl AppDelegate {
             menu_history_ids: RefCell::new(Vec::new()),
             previous_frontmost_bundle_id: RefCell::new(None),
             active_trust_prompt_id: RefCell::new(None),
+            application_icon: OnceCell::new(),
             status_item: OnceCell::new(),
+            status_item_icon: OnceCell::new(),
             status_menu: OnceCell::new(),
             history_context_menu: RefCell::new(None),
             history_context_separator_item: RefCell::new(None),

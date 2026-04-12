@@ -243,6 +243,19 @@ first_existing_file_path() {
   return 1
 }
 
+resolve_cargo_target_dir() {
+  read_var_or_default CARGO_TARGET_DIR "$ROOT_DIR/target"
+}
+
+find_generated_release_build_output() {
+  local file_name="$1"
+  local target_dir
+  target_dir="$(resolve_cargo_target_dir)"
+
+  [[ -d "$target_dir/release/build" ]] || return 1
+  find "$target_dir/release/build" -path "*/out/$file_name" -type f | head -n 1
+}
+
 copy_file_to_dist() {
   local source_path="$1"
   local target_name="$2"
@@ -1152,6 +1165,8 @@ write_macos_info_plist() {
     <string>${executable_name}</string>
     <key>CFBundleIdentifier</key>
     <string>${bundle_identifier}</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
@@ -1175,9 +1190,24 @@ write_macos_info_plist() {
 EOF
 }
 
+create_macos_bundle_icon() {
+  local resources_dir="$1"
+  local source_icon_path icon_file_path
+
+  source_icon_path="$(find_generated_release_build_output "cliplink-macos-bundle-icon.icns" || true)"
+  [[ -n "$source_icon_path" ]] || die "Missing generated macOS bundle icon. Re-run the release build after confirming resources/icon.svg exists."
+
+  icon_file_path="$resources_dir/AppIcon.icns"
+
+  rm -f "$icon_file_path"
+  cp "$source_icon_path" "$icon_file_path"
+
+  printf '%s\n' "$icon_file_path"
+}
+
 macos_release() {
   ensure_cargo_available
-  local bundle_name executable_name bundle_identifier bundle_version build_version development_region minimum_system_version macos_entitlements_path bundle_dir info_plist_path
+  local bundle_name executable_name bundle_identifier bundle_version build_version development_region minimum_system_version macos_entitlements_path bundle_dir info_plist_path resources_dir app_icon_path
 
   bundle_name="$(resolve_macos_bundle_name)"
   executable_name="$(resolve_macos_executable_name)"
@@ -1198,9 +1228,12 @@ macos_release() {
   mkdir -p "$DIST_DIR"
   bundle_dir="$DIST_DIR/$bundle_name.app"
   info_plist_path="$bundle_dir/Contents/Info.plist"
+  resources_dir="$bundle_dir/Contents/Resources"
 
   rm -rf "$bundle_dir"
   mkdir -p "$bundle_dir/Contents/MacOS"
+  mkdir -p "$resources_dir"
+  app_icon_path="$(create_macos_bundle_icon "$resources_dir")"
   write_macos_info_plist \
     "$info_plist_path" \
     "$bundle_name" \
@@ -1237,6 +1270,7 @@ macos_release() {
     log "macOS signing is not configured; produced an unsigned app bundle"
   fi
 
+  log "Generated macOS app icon: $app_icon_path"
   log "Generated Info.plist: $info_plist_path"
   log "Created $bundle_dir"
 }

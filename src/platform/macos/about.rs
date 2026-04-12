@@ -5,7 +5,8 @@ use crate::constants::app::APP_NAME;
 use crate::platform::macos::widgets::{make_field_label, make_secondary_label};
 
 const ABOUT_WIDTH: f64 = 368.0;
-const ABOUT_HEIGHT: f64 = 168.0;
+const ABOUT_HEIGHT: f64 = 228.0;
+const ABOUT_ICON_SIZE: f64 = 72.0;
 
 impl AppDelegate {
     pub(super) fn install_about_window(&self, mtm: MainThreadMarker) {
@@ -32,21 +33,30 @@ impl AppDelegate {
             return;
         };
 
+        let icon = NSImageView::imageViewWithImage(self.application_icon_image(), mtm);
+        icon.setFrame(NSRect::new(
+            NSPoint::new((ABOUT_WIDTH - ABOUT_ICON_SIZE) * 0.5, ABOUT_HEIGHT - 98.0),
+            NSSize::new(ABOUT_ICON_SIZE, ABOUT_ICON_SIZE),
+        ));
+        icon.setImageScaling(NSImageScaling::ScaleProportionallyUpOrDown);
+        content.addSubview(&icon);
+
         let title = make_field_label(
             mtm,
             APP_NAME,
             NSRect::new(
-                NSPoint::new(36.0, ABOUT_HEIGHT - 72.0),
+                NSPoint::new(36.0, ABOUT_HEIGHT - 130.0),
                 NSSize::new(ABOUT_WIDTH - 72.0, 28.0),
             ),
         );
         title.setAlignment(objc2_app_kit::NSTextAlignment::Center);
+        title.setFont(Some(&NSFont::boldSystemFontOfSize(20.0)));
 
         let version = make_secondary_label(
             mtm,
             &format!("版本 {}", env!("CARGO_PKG_VERSION")),
             NSRect::new(
-                NSPoint::new(36.0, ABOUT_HEIGHT - 100.0),
+                NSPoint::new(36.0, ABOUT_HEIGHT - 158.0),
                 NSSize::new(ABOUT_WIDTH - 72.0, 18.0),
             ),
         );
@@ -56,7 +66,7 @@ impl AppDelegate {
             mtm,
             "局域网剪贴板共享工具",
             NSRect::new(
-                NSPoint::new(36.0, ABOUT_HEIGHT - 126.0),
+                NSPoint::new(36.0, ABOUT_HEIGHT - 184.0),
                 NSSize::new(ABOUT_WIDTH - 72.0, 18.0),
             ),
         );

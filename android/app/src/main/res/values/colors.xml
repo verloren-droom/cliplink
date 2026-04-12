@@ -10,6 +10,7 @@
     <color name="color_action_primary">#E8F0FF</color>
     <color name="color_action_secondary">#EEF2F6</color>
     <color name="color_ripple">#160F172A</color>
+    <color name="color_launcher_background">#F8FAFF</color>
     <color name="color_badge_local_bg">#EEF2F7</color>
     <color name="color_badge_local_text">#475569</color>
     <color name="color_badge_remote_bg">#E7F0FF</color>

@@ -56,8 +56,11 @@ global-hotkey = "0.7.0"
 objc2 = { version = "0.6.4", features = ["unstable-requires-macos"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSAlert", "NSApplication", "NSButton", "NSCell", "NSColor", "NSControl", "NSEvent", "NSFont", "NSGraphics", "NSImage", "NSImageView", "NSMenu", "NSMenuItem", "NSPanel", "NSParagraphStyle", "NSPasteboard", "NSPasteboardItem", "NSPopUpButton", "NSResponder", "NSRunningApplication", "NSScreen", "NSSearchField", "NSScrollView", "NSStatusBar", "NSStatusBarButton", "NSStatusItem", "NSTabView", "NSTabViewItem", "NSTableCellView", "NSTableColumn", "NSTableHeaderView", "NSTableView", "NSText", "NSTextField", "NSTextView", "NSUserInterfaceItemIdentification", "NSView", "NSWindow", "NSWorkspace", "block2", "objc2-core-foundation", "objc2-core-graphics", "objc2-quartz-core"] }
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "objc2", "bitflags", "CGEvent", "CGEventSource", "CGEventTypes", "CGRemoteOperation"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSArray", "NSIndexSet", "NSNotification", "NSObject", "NSGeometry", "NSString", "NSTimer", "NSURL"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSArray", "NSData", "NSIndexSet", "NSNotification", "NSObject", "NSGeometry", "NSString", "NSTimer", "NSURL"] }
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["CALayer", "objc2-core-foundation", "objc2-core-graphics"] }
+
+[target.'cfg(target_os = "macos")'.build-dependencies]
+resvg = "0.45.1"
 
 [profile.dev]
 debug = 0
