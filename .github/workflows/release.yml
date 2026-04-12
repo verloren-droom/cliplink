@@ -226,7 +226,19 @@ jobs:
   #           exit 1
   #         }
 
-  #         zip_path="${app_path}.zip"
+  #         package_name="$(awk -F ' *= *' '
+  #           $0 == "[package]" { in_package = 1; next }
+  #           /^\[/ && in_package { exit }
+  #           in_package && $1 == "name" {
+  #             value = $2
+  #             gsub(/^"/, "", value)
+  #             gsub(/"$/, "", value)
+  #             print value
+  #             exit
+  #           }
+  #         ' Cargo.toml)"
+  #         arch="$(uname -m)"
+  #         zip_path="dist/${package_name}-${{ needs.detect-version.outputs.version }}-macos-${arch}.app.zip"
   #         rm -f "$zip_path"
   #         ditto -c -k --sequesterRsrc --keepParent "$app_path" "$zip_path"
   #         echo "Packaged macOS release asset: $zip_path"
@@ -402,7 +414,7 @@ jobs:
         run: |
           ./scripts/build.sh android-release
           echo "Android build outputs:"
-          find android/app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' | sort
+          find dist -maxdepth 1 -type f -name '*.apk' | sort
 
       - name: Upload Android Artifacts
         uses: actions/upload-artifact@v4
@@ -410,7 +422,7 @@ jobs:
           name: release-android
           if-no-files-found: error
           path: |
-            android/app/build/outputs/apk/release/*.apk
+            dist/*.apk
 
   publish-release:
     name: Publish GitHub Release

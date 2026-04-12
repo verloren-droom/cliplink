@@ -140,10 +140,10 @@ Commands:
         Optional signing: ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD,
         ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
       Output:
-        android/app/build/outputs/apk/release/app-release.apk
+        dist/<package>-<version>-android-<abi>.apk
         Installs the signed Android release app on the current device user
         when adb and a connected device are available.
-        or app-release-unsigned.apk when signing is not configured
+        or dist/<package>-<version>-android-<abi>-unsigned.apk
 
   windows-env
       Print resolved Windows inputs: target triple, rust host, rustup toolchain,
@@ -159,7 +159,7 @@ Commands:
       Input:
         Windows Rust target and toolchain
       Output:
-        dist/<package>-windows-<target>.exe
+        dist/<package>-<version>-windows-<target>.exe
 
   macos-release
       Input:
@@ -241,6 +241,20 @@ first_existing_file_path() {
   done
 
   return 1
+}
+
+copy_file_to_dist() {
+  local source_path="$1"
+  local target_name="$2"
+  local target_path="$DIST_DIR/$target_name"
+
+  [[ -f "$source_path" ]] || die "Missing source file: $source_path"
+
+  mkdir -p "$DIST_DIR"
+  rm -f "$target_path"
+  cp "$source_path" "$target_path"
+
+  printf '%s\n' "$target_path"
 }
 
 print_common_build_context() {
@@ -378,6 +392,15 @@ read_cargo_package_name() {
 
 read_cargo_package_version() {
   read_cargo_package_value version
+}
+
+resolve_release_artifact_prefix() {
+  local package_name package_version
+  package_name="$(read_cargo_package_name)"
+  [[ -n "$package_name" ]] || die "Failed to read package name from Cargo.toml"
+  package_version="$(read_cargo_package_version)"
+  [[ -n "$package_version" ]] || die "Failed to read package version from Cargo.toml"
+  printf '%s-%s\n' "$package_name" "$package_version"
 }
 
 read_rust_string_constant() {
@@ -836,6 +859,48 @@ find_android_apk() {
   return 1
 }
 
+read_android_apk_abis() {
+  local apk_path="$1"
+
+  [[ -f "$apk_path" ]] || return 1
+  command_exists unzip || return 1
+
+  unzip -Z1 "$apk_path" 2>/dev/null \
+    | awk -F/ 'NF == 3 && $1 == "lib" { print $2 }' \
+    | sort -u
+}
+
+resolve_android_release_abi_label() {
+  local source_apk_path="$1"
+  local abi_label
+
+  abi_label="$(read_android_apk_abis "$source_apk_path" | paste -sd+ - || true)"
+  printf '%s\n' "${abi_label:-universal}"
+}
+
+resolve_android_release_asset_name() {
+  local source_apk_path="$1"
+  local artifact_prefix abi_label
+  artifact_prefix="$(resolve_release_artifact_prefix)"
+  abi_label="$(resolve_android_release_abi_label "$source_apk_path")"
+
+  if [[ "$source_apk_path" == *"-unsigned.apk" ]]; then
+    printf '%s-android-%s-unsigned.apk\n' "$artifact_prefix" "$abi_label"
+  else
+    printf '%s-android-%s.apk\n' "$artifact_prefix" "$abi_label"
+  fi
+}
+
+stage_android_release_apk() {
+  local source_apk_path="$1"
+  local target_name artifact_prefix
+  artifact_prefix="$(resolve_release_artifact_prefix)"
+  target_name="$(resolve_android_release_asset_name "$source_apk_path")"
+
+  rm -f "$DIST_DIR/${artifact_prefix}-android-"*.apk
+  copy_file_to_dist "$source_apk_path" "$target_name"
+}
+
 read_android_current_user() {
   adb shell am get-current-user 2>/dev/null | tr -d '\r' | tr -d '\n'
 }
@@ -965,34 +1030,35 @@ android_debug() {
 }
 
 android_release() {
-  local release_apk_path
+  local source_apk_path release_apk_path
 
   android_build ":app:assembleRelease"
-  release_apk_path="$(find_android_apk release)" || die "Missing Android release APK."
-  print_android_apk_path release
+  source_apk_path="$(find_android_apk release)" || die "Missing Android release APK."
+  release_apk_path="$(stage_android_release_apk "$source_apk_path")"
+  log "Source APK: $source_apk_path"
+  log "Created $release_apk_path"
   maybe_install_android_release_apk "$release_apk_path"
 }
 
 windows_release() {
-  local windows_target package_name executable_name source_executable dist_executable
+  local windows_target package_name executable_name source_executable dist_executable artifact_prefix
 
   windows_target="$(require_windows_target)"
   ensure_windows_build_toolchain "$windows_target"
 
   package_name="$(read_cargo_package_name)"
   [[ -n "$package_name" ]] || die "Failed to read package name from Cargo.toml"
+  artifact_prefix="$(resolve_release_artifact_prefix)"
   executable_name="${package_name}.exe"
   source_executable="$ROOT_DIR/target/$windows_target/release/$executable_name"
-  dist_executable="$DIST_DIR/${package_name}-windows-$windows_target.exe"
+  dist_executable="$DIST_DIR/${artifact_prefix}-windows-$windows_target.exe"
 
   log "Building Windows release binary for $windows_target"
   run_cargo build --release --target "$windows_target"
 
   [[ -f "$source_executable" ]] || die "Missing Windows executable at $source_executable"
 
-  mkdir -p "$DIST_DIR"
-  rm -f "$dist_executable"
-  cp "$source_executable" "$dist_executable"
+  dist_executable="$(copy_file_to_dist "$source_executable" "$(basename "$dist_executable")")"
 
   log "Source executable: $source_executable"
   log "Created $dist_executable"
