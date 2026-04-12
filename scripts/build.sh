@@ -136,10 +136,13 @@ Commands:
   android-release
       Input:
         Android SDK / NDK, JDK 17, Rust Android target, cargo-ndk
+        Optional local install: adb, connected device
         Optional signing: ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD,
         ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
       Output:
         android/app/build/outputs/apk/release/app-release.apk
+        Installs the signed Android release app on the current device user
+        when adb and a connected device are available.
         or app-release-unsigned.apk when signing is not configured
 
   windows-env
@@ -499,6 +502,15 @@ resolve_android_keystore_path() {
     "$PACKAGING_DIR/android/release.jks"
 }
 
+export_var_if_set() {
+  local var_name="$1"
+  local var_value
+  var_value="$(read_var "$var_name")"
+  if [[ -n "$var_value" ]]; then
+    export "${var_name}=${var_value}"
+  fi
+}
+
 export_android_build_env() {
   local android_sdk_dir android_ndk_dir android_keystore_path
   android_sdk_dir="$(require_android_sdk_dir)"
@@ -513,14 +525,19 @@ export_android_build_env() {
   if [[ -n "$android_keystore_path" ]]; then
     export ANDROID_KEYSTORE_PATH="$android_keystore_path"
   fi
+
+  export_var_if_set ANDROID_KEYSTORE_PASSWORD
+  export_var_if_set ANDROID_KEY_ALIAS
+  export_var_if_set ANDROID_KEY_PASSWORD
 }
 
 print_android_build_env() {
-  local android_sdk_dir sdkmanager_path android_ndk_dir active_toolchain
+  local android_sdk_dir sdkmanager_path android_ndk_dir active_toolchain android_keystore_path
   android_sdk_dir="$(detect_android_sdk_dir || true)"
   sdkmanager_path=""
   android_ndk_dir=""
   active_toolchain="$(active_rustup_toolchain)"
+  android_keystore_path="$(resolve_android_keystore_path || true)"
 
   if [[ -n "$android_sdk_dir" ]]; then
     sdkmanager_path="$(detect_sdkmanager_path "$android_sdk_dir" || true)"
@@ -532,6 +549,8 @@ print_android_build_env() {
   printf 'ANDROID_NDK_HOME=%s\n' "${android_ndk_dir:-<not found>}"
   printf 'SDKMANAGER=%s\n' "${sdkmanager_path:-<not found>}"
   printf 'JAVA_HOME=%s\n' "$(read_var_or_default JAVA_HOME '<unset>')"
+  printf 'ANDROID_KEYSTORE_PATH=%s\n' "${android_keystore_path:-<not found>}"
+  printf 'ANDROID_RELEASE_SIGNING=%s\n' "$(android_release_signing_configured && printf 'enabled' || printf 'disabled')"
   printf 'RUSTUP_TOOLCHAIN=%s\n' "${active_toolchain:-<not using rustup>}"
   printf 'CARGO=%s\n' "$(describe_cargo_binary)"
   printf 'RUSTC=%s\n' "$(describe_rustc_binary)"
@@ -817,6 +836,77 @@ find_android_apk() {
   return 1
 }
 
+read_android_current_user() {
+  adb shell am get-current-user 2>/dev/null | tr -d '\r' | tr -d '\n'
+}
+
+ensure_android_package_available_for_current_user() {
+  local application_id="$1"
+  local current_user="$2"
+
+  if [[ -n "$current_user" && -n "$application_id" ]]; then
+    adb shell cmd package install-existing --user "$current_user" "$application_id" >/dev/null 2>&1 || true
+    log "Ensured package $application_id is available for Android user $current_user"
+  fi
+}
+
+has_connected_android_device() {
+  command_exists adb || return 1
+  adb devices | awk '
+    NR > 1 && $2 == "device" { found = 1; exit }
+    END { exit(found ? 0 : 1) }
+  '
+}
+
+install_android_apk_on_connected_device() {
+  local apk_path="$1"
+  local current_user application_id install_output install_status
+
+  require_command adb
+  [[ -f "$apk_path" ]] || die "Missing Android APK: $apk_path"
+
+  application_id="$(read_android_application_id)"
+  log "Installing Android APK on connected device: $apk_path"
+
+  set +e
+  install_output="$(adb install -r "$apk_path" 2>&1)"
+  install_status=$?
+  set -e
+
+  [[ -n "$install_output" ]] && printf '%s\n' "$install_output"
+
+  if [[ "$install_status" -ne 0 ]]; then
+    if [[ "$install_output" == *"INSTALL_FAILED_UPDATE_INCOMPATIBLE"* ]]; then
+      die "adb install failed because $application_id is already installed with a different signing certificate. Uninstall the existing app first with: adb uninstall $application_id, or rebuild with the same keystore used by the installed app."
+    fi
+    die "adb install failed for $application_id."
+  fi
+
+  current_user="$(read_android_current_user)"
+  ensure_android_package_available_for_current_user "$application_id" "$current_user"
+}
+
+maybe_install_android_release_apk() {
+  local apk_path="$1"
+
+  if [[ "$apk_path" == *"-unsigned.apk" ]]; then
+    warn "Release APK is unsigned; skipping adb install."
+    return 0
+  fi
+
+  if ! command_exists adb; then
+    warn "adb is not available; skipping release APK install."
+    return 0
+  fi
+
+  if ! has_connected_android_device; then
+    warn "No connected Android device detected; skipping release APK install."
+    return 0
+  fi
+
+  install_android_apk_on_connected_device "$apk_path"
+}
+
 print_android_apk_path() {
   local build_type="$1"
   log "APK: $(find_android_apk "$build_type" || printf '%s' "$ANDROID_DIR/app/build/outputs/apk/$build_type")"
@@ -868,13 +958,19 @@ android_debug() {
   local current_user application_id
   log "Running Android Gradle task :app:installDebug"
   run_android_gradle ":app:installDebug"
-  current_user="$(adb shell am get-current-user 2>/dev/null | tr -d '\r' | tr -d '\n')"
+  current_user="$(read_android_current_user)"
   application_id="$(read_android_application_id)"
-  if [[ -n "$current_user" && -n "$application_id" ]]; then
-    adb shell cmd package install-existing --user "$current_user" "$application_id" >/dev/null 2>&1 || true
-    log "Ensured package $application_id is available for Android user $current_user"
-  fi
+  ensure_android_package_available_for_current_user "$application_id" "$current_user"
   print_android_apk_path debug
+}
+
+android_release() {
+  local release_apk_path
+
+  android_build ":app:assembleRelease"
+  release_apk_path="$(find_android_apk release)" || die "Missing Android release APK."
+  print_android_apk_path release
+  maybe_install_android_release_apk "$release_apk_path"
 }
 
 windows_release() {
@@ -1101,8 +1197,7 @@ main() {
       android_debug
       ;;
     android-release)
-      android_build ":app:assembleRelease"
-      print_android_apk_path release
+      android_release
       ;;
     windows-env)
       print_windows_build_env

@@ -239,92 +239,92 @@ jobs:
           path: |
             dist/*.app.zip
 
-  build-windows:
-    name: Build Windows Assets
-    runs-on: windows-latest
-    needs: detect-version
-    if: needs.detect-version.outputs.should_release == 'true'
-    environment: release
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
-
-      - name: Setup Windows Target
-        run: |
-          chmod +x scripts/build.sh
-          ./scripts/build.sh windows-setup
-
-      - name: Build Windows Release
-        run: |
-          ./scripts/build.sh windows-release
-          echo "Windows build outputs:"
-          find dist -maxdepth 1 -type f -name '*.exe' | sort
-
-      - name: Prepare Windows Signing Certificate
-        env:
-          WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
-          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
-        run: |
-          set -euo pipefail
-
-          : "${WINDOWS_PFX_BASE64:?Missing release secret WINDOWS_PFX_BASE64}"
-          : "${WINDOWS_PFX_PASSWORD:?Missing release secret WINDOWS_PFX_PASSWORD}"
-
-          mkdir -p packaging/windows
-
-          certificate_path="$GITHUB_WORKSPACE/packaging/windows/signing.pfx"
-          printf '%s' "$WINDOWS_PFX_BASE64" | base64 --decode > "$certificate_path"
-
-          {
-            echo "WINDOWS_PFX_PATH=$certificate_path"
-          } >> "$GITHUB_ENV"
-
-          echo "Prepared Windows signing certificate in packaging/windows."
-
-      - name: Sign Windows Executable
-        env:
-          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
-          WINDOWS_TIMESTAMP_URL: http://timestamp.digicert.com
-        run: |
-          set -euo pipefail
-
-          pwsh -NoProfile -Command '
-            $signtool = (Get-Command signtool.exe -ErrorAction Stop).Source
-            $exeFiles = Get-ChildItem -Path "dist" -Filter "*.exe" -File
-            if ($exeFiles.Count -eq 0) {
-              throw "No Windows executable was produced in dist/."
-            }
-            foreach ($exe in $exeFiles) {
-              & $signtool sign `
-                /fd SHA256 `
-                /td SHA256 `
-                /tr $env:WINDOWS_TIMESTAMP_URL `
-                /f $env:WINDOWS_PFX_PATH `
-                /p $env:WINDOWS_PFX_PASSWORD `
-                $exe.FullName
-              if ($LASTEXITCODE -ne 0) {
-                throw "signtool failed for $($exe.FullName)"
-              }
-              Write-Host "Signed Windows executable: $($exe.FullName)"
-            }
-          '
-
-      - name: Upload Windows Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-windows
-          if-no-files-found: error
-          path: |
-            dist/*.exe
+  # build-windows:
+  #   name: Build Windows Assets
+  #   runs-on: windows-latest
+  #   needs: detect-version
+  #   if: needs.detect-version.outputs.should_release == 'true'
+  #   environment: release
+  #   defaults:
+  #     run:
+  #       shell: bash
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v5
+  #
+  #     - name: Setup Rust
+  #       uses: dtolnay/rust-toolchain@stable
+  #
+  #     - name: Cache Rust
+  #       uses: Swatinem/rust-cache@v2
+  #
+  #     - name: Setup Windows Target
+  #       run: |
+  #         chmod +x scripts/build.sh
+  #         ./scripts/build.sh windows-setup
+  #
+  #     - name: Build Windows Release
+  #       run: |
+  #         ./scripts/build.sh windows-release
+  #         echo "Windows build outputs:"
+  #         find dist -maxdepth 1 -type f -name '*.exe' | sort
+  #
+  #     - name: Prepare Windows Signing Certificate
+  #       env:
+  #         WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
+  #         WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
+  #       run: |
+  #         set -euo pipefail
+  #
+  #         : "${WINDOWS_PFX_BASE64:?Missing release secret WINDOWS_PFX_BASE64}"
+  #         : "${WINDOWS_PFX_PASSWORD:?Missing release secret WINDOWS_PFX_PASSWORD}"
+  #
+  #         mkdir -p packaging/windows
+  #
+  #         certificate_path="$GITHUB_WORKSPACE/packaging/windows/signing.pfx"
+  #         printf '%s' "$WINDOWS_PFX_BASE64" | base64 --decode > "$certificate_path"
+  #
+  #         {
+  #           echo "WINDOWS_PFX_PATH=$certificate_path"
+  #         } >> "$GITHUB_ENV"
+  #
+  #         echo "Prepared Windows signing certificate in packaging/windows."
+  #
+  #     - name: Sign Windows Executable
+  #       env:
+  #         WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
+  #         WINDOWS_TIMESTAMP_URL: http://timestamp.digicert.com
+  #       run: |
+  #         set -euo pipefail
+  #
+  #         pwsh -NoProfile -Command '
+  #           $signtool = (Get-Command signtool.exe -ErrorAction Stop).Source
+  #           $exeFiles = Get-ChildItem -Path "dist" -Filter "*.exe" -File
+  #           if ($exeFiles.Count -eq 0) {
+  #             throw "No Windows executable was produced in dist/."
+  #           }
+  #           foreach ($exe in $exeFiles) {
+  #             & $signtool sign `
+  #               /fd SHA256 `
+  #               /td SHA256 `
+  #               /tr $env:WINDOWS_TIMESTAMP_URL `
+  #               /f $env:WINDOWS_PFX_PATH `
+  #               /p $env:WINDOWS_PFX_PASSWORD `
+  #               $exe.FullName
+  #             if ($LASTEXITCODE -ne 0) {
+  #               throw "signtool failed for $($exe.FullName)"
+  #             }
+  #             Write-Host "Signed Windows executable: $($exe.FullName)"
+  #           }
+  #         '
+  #
+  #     - name: Upload Windows Artifacts
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: release-windows
+  #         if-no-files-found: error
+  #         path: |
+  #           dist/*.exe
 
   build-android:
     name: Build Android Assets
@@ -418,7 +418,7 @@ jobs:
     needs:
       - detect-version
       - build-macos
-      - build-windows
+      # - build-windows
       - build-android
     if: needs.detect-version.outputs.should_release == 'true'
     permissions:
